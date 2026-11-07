@@ -1,0 +1,13 @@
+# replai — runtime dependencies
+# Python 3.10+ required (uses PEP 604 `X | None` in annotations)
+
+# Google GenAI SDK (the new `from google import genai` API, NOT the legacy
+# `google-generativeai` package). Version 1.0+ exposes `client.files.upload`,
+# `client.chats.create`, and `types.Part.from_uri/from_bytes/from_text`.
+google-genai>=1.0.0
+
+# Optional but recommended: parses .gitignore for `--project` scanning.
+# If absent, replai falls back to built-in EXCLUDED_DIRS/FILE_PATTERNS only.
+pathspec>=0.12.0
+
+prompt-toolkit>=3.0.0
