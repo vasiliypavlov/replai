@@ -1,4 +1,4 @@
-# replai v0.0.2
+# replai v0.0.4
 # Terminal REPL for Gemini — project-aware code chat with file round-trip.
 # State dir: ./replai/ (visible, portable). No hidden dirs.
 # License: MIT
@@ -18,28 +18,27 @@ import shutil
 import sys
 import time
 import zipfile
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 try:
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.history import InMemoryHistory
-    from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
     from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.keys import Keys
+    from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+    from prompt_toolkit.history import InMemoryHistory
     HAS_PROMPT_TOOLKIT = True
 except ImportError:
     HAS_PROMPT_TOOLKIT = False
 
-# Патч ANSI-последовательностей для распознавания Shift+Enter и Alt+Enter в современных терминалах
 if HAS_PROMPT_TOOLKIT:
-    try:
-        for seq in (
-            "\x1b[13;2u", "\x1b[27;2;13~", "\x1b[27;2;13u",  # Shift+Enter
-            "\x1b[13;3u", "\x1b[27;3;13~", "\x1b[27;3;13u",  # Alt+Enter
-        ):
-            ANSI_SEQUENCES[seq] = (Keys.Escape, Keys.ControlM)
-    except Exception:
-        pass
+    for _seq in (
+        "\x1b[13;2u",     # Kitty keyboard protocol
+        "\x1b[27;2;13~",   # xterm modifyOtherKeys=2
+        "\x1b[27;2;13u",   # CSI-u variant
+        "\x1b[13;2~",      # Linux / Cygwin variant
+    ):
+        ANSI_SEQUENCES[_seq] = (Keys.Escape, Keys.ControlM)
 
 try:
     import pathspec
@@ -50,7 +49,7 @@ except ImportError:
 from google import genai
 from google.genai import types
 
-__version__ = "0.0.2"
+__version__ = "0.0.4"
 
 # ─── Localization (i18n) ──────────────────────────────────────────────────
 CURRENT_LANG = os.environ.get("REPLAI_LANG", "ru").lower().strip()
@@ -75,8 +74,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "resume_help": "Продолжить конкретную сессию (без ID — интерактивный выбор)",
         "continue_help": "Продолжить последнюю сессию без меню",
         "new_help": "Не показывать меню сессий, создать новую",
-        "sync_help": "Синхронизировать файлы сессии с хранилищем и выйти",
-        "dry_run_help": "Показать операции синхронизации без реальных действий",
+        "sync_help": "Синхронизировать файлы сессии с хранилищем (в TTY запускает чат)",
+        "dry_run_help": "Показать операции без реальных действий",
         "sync_check_help": "Политика проверки синхронизации",
         "yes_help": "Автоподтверждение [y/N] и перезапись без вопросов",
         "force_help": "Перезаписывать файлы при /save и /apply без вопросов",
@@ -85,6 +84,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "lang_help": "Язык интерфейса: ru (по умолчанию) или en",
         "retries_help": "Максимум попыток отправки при 503/429 (default: %(default)s)",
         "retry_delay_help": "Начальная задержка backoff в секундах (default: %(default)s)",
+        "project_include_ignored_help": "Синхронизировать файлы из .gitignore без подтверждения",
+        "sync_clean_detached_help": "Разрешить удаление detached файлов из Files API для очистки квоты",
         "server_overloaded": "⚠ Сервер перегружен ({err}). Повтор через {delay:.1f} сек (попытка {attempt}/{max_retries})...",
         "key_perms_warn": "⚠ Файл ключа доступен группе/остальным: {path}. Рекомендуется: chmod 600 {path}",
         "key_read_err": "⚠ Не удалось прочитать {path}: {err}",
@@ -103,18 +104,25 @@ STRINGS: dict[str, dict[str, str]] = {
         "proj_limit_bytes": "⚠ Достигнут лимит проекта ({limit}); остаток пропущен.",
         "proj_limit_files": "⚠ Достигнут лимит файлов ({limit}).",
         "extracting_zip": "Распаковка архива проекта в {dir}...",
-        "scanning_proj": "Сканирование проекта: {path}",
+        "scanning_proj": "Сканирование: {path}",
         "indexed_files": "  Индексировано файлов: {count}",
         "sync_banner": "Запуск синхронизации с хранилищем Gemini...",
         "sync_summary": "\nИтог синхронизации:",
         "sync_reuploaded": "✓ Перезалит: {name}",
         "sync_uploaded": "✓ Загружен: {name}",
+        "sync_ask_upload_all": "⚠ Найдено {count} файлов для загрузки. Загрузить все? [Y/n]: ",
+        "sync_ask_upload_dir": "⚠ Загрузить все {count} файлов в папке '{dir}'? [Y/n]: ",
         "sync_ask_reupload": "⚠ {name} изменился. Перезалить? [y/N]: ",
         "sync_ask_upload": "Загрузить новый файл {name}? [y/N]: ",
         "sync_detached": "⚠ {name}: локальный файл не найден; используется копия из хранилища",
         "sync_lost": "✗ {name}: файл недоступен ни локально, ни в хранилище",
         "sync_out_of_sync": "⚠ Предупреждение: {name} изменён локально (out-of-sync).",
         "sync_ask_update": "⚠ {name} изменился на диске. Обновить в хранилище? [y/N]: ",
+        "sync_gitignore_ask": "⚠ Найдены файлы, исключенные в .gitignore ({path}: {count} файлов). Синхронизировать их с AI Studio? [y/N/a]: ",
+        "sync_detached_ask": "⚠ Обнаружено {count} отсоединённых (detached) файлов. Они есть в AI Studio, но отсутствуют локально. Удалить их из сессии и AI Studio (освободить квоту)? [y/N]: ",
+        "sync_detached_deleted": "✓ Удалён из хранилища и сессии: {name}",
+        "sync_detached_del_err": "⚠ Ошибка удаления файла из хранилища ({uri}): {err}",
+        "project_conflict_ask": "⚠ В сессии был проект {old}. Вы указали {new}. Заменить контекст проекта? [Y/n]: ",
         "file_not_found": "Ошибка: файл не найден: {path}",
         "file_unsupported": "⚠ Пропущен неподдерживаемый тип файла: {path}",
         "file_read_err": "⚠ Ошибка чтения файла {path}: {err}",
@@ -161,9 +169,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "proj_structure_header": "Структура проекта",
         "proj_contents_header": "Содержимое файлов проекта",
         "banner_active": " replai v{ver} — сессия активна",
-        "banner_commands": " Команды: /list /focus /send /save /md /apply /forget /session /history /help | exit",
+        "banner_commands": " Команды: /list /focus /send /save /md /apply /forget /sync /session /history /help | exit",
         "banner_mentions": " Упоминания файлов: @path прямо в тексте (версия из хранилища)",
-        "banner_keys": " Ввод: Enter — отправка | Alt+Enter (Shift+Enter) — перенос строки",
+        "banner_shortcuts": " Перенос строки: Shift+Enter / Alt+Enter. Отправка: Enter.",
         "user_prompt": "\nВы: ",
         "session_ended": "\nСессия завершена.",
         "operation_interrupted": "\n[Операция прервана]",
@@ -232,22 +240,17 @@ STRINGS: dict[str, dict[str, str]] = {
   /save [path]               — сохранить код/медиа последнего ответа в архив saved/
   /md <file>                 — записать весь последний ответ в Markdown
   /apply <src> [dst]         — выгрузить сохранённые файлы из saved/ в проект
-  /forget <pattern>          — убрать запись из сессии (файл на диске не удаляется)
+  /forget <pattern>          — удалить запись (detached-файлы удаляются и из облака)
+  /sync [path]               — синхронизировать проект или новую папку с хранилищем
   /session                   — статус и параметры сессии
   /history                   — журнал ходов текущей сессии
   /help                      — справка
   exit | quit | /exit        — завершение (генерирует summary)
 
 Ввод текста:
-  Enter                      — отправить сообщение
-  Alt+Enter / Shift+Enter    — перенос строки (многострочный ввод)
-  Вставка из буфера          — поддерживает сохранение всех строк и отступов
-
-@name — это ВСЕГДА файл из хранилища (Files API). Если файл в хранилище
-не найден или истёк (48ч), будет предложено загрузить версию с диска.
-
-Медиа из ответов модели автоматически пишется в media/.
-При совпадении имени при /save: [o] перезаписать, [k] новый с ID хода, [s] пропустить.
+  Shift+Enter / Alt+Enter    — мягкий перенос строки без отправки
+  Enter                      — отправить сообщение модели
+  Стрелки ↑ / ↓              — навигация по истории команд
 """.strip(),
     },
     "en": {
@@ -265,7 +268,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "resume_help": "Resume a specific session (interactive selection if no ID)",
         "continue_help": "Resume the last session without menu",
         "new_help": "Do not show session menu, create a new session",
-        "sync_help": "Synchronize session files with cloud storage and exit",
+        "sync_help": "Synchronize session files with storage (starts chat in TTY)",
         "dry_run_help": "Show actions without executing",
         "sync_check_help": "Sync verification policy",
         "yes_help": "Auto-confirm [y/N] prompts and overwrite without asking",
@@ -275,6 +278,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "lang_help": "UI language: ru (default) or en",
         "retries_help": "Max send attempts on 503/429 (default: %(default)s)",
         "retry_delay_help": "Initial backoff delay in seconds (default: %(default)s)",
+        "project_include_ignored_help": "Sync .gitignore excluded files without prompting",
+        "sync_clean_detached_help": "Allow deletion of detached files from Files API to free quota",
         "server_overloaded": "⚠ Server overloaded ({err}). Retrying in {delay:.1f}s (attempt {attempt}/{max_retries})...",
         "key_perms_warn": "⚠ Key file accessible by group/others: {path}. Recommended: chmod 600 {path}",
         "key_read_err": "⚠ Failed to read {path}: {err}",
@@ -293,18 +298,25 @@ STRINGS: dict[str, dict[str, str]] = {
         "proj_limit_bytes": "⚠ Project size limit reached ({limit}); remaining files skipped.",
         "proj_limit_files": "⚠ Project file count limit reached ({limit}).",
         "extracting_zip": "Extracting project archive to {dir}...",
-        "scanning_proj": "Scanning project: {path}",
+        "scanning_proj": "Scanning: {path}",
         "indexed_files": "  Indexed files: {count}",
         "sync_banner": "Starting synchronization with Gemini storage...",
         "sync_summary": "\nSync Summary:",
         "sync_reuploaded": "✓ Re-uploaded: {name}",
         "sync_uploaded": "✓ Uploaded: {name}",
+        "sync_ask_upload_all": "⚠ Found {count} files to upload. Upload all? [Y/n]: ",
+        "sync_ask_upload_dir": "⚠ Upload all {count} files in '{dir}'? [Y/n]: ",
         "sync_ask_reupload": "⚠ {name} has changed. Re-upload? [y/N]: ",
         "sync_ask_upload": "Upload new file {name}? [y/N]: ",
         "sync_detached": "⚠ {name}: local file missing; using storage copy",
         "sync_lost": "✗ {name}: unavailable both locally and in storage",
         "sync_out_of_sync": "⚠ Warning: {name} was modified locally (out-of-sync).",
         "sync_ask_update": "⚠ {name} was modified on disk. Update in storage? [y/N]: ",
+        "sync_gitignore_ask": "⚠ Found files excluded in .gitignore ({path}: {count} files). Sync them with AI Studio? [y/N/a]: ",
+        "sync_detached_ask": "⚠ Detected {count} detached files (in cloud, missing locally). Delete them from session and AI Studio (free quota)? [y/N]: ",
+        "sync_detached_deleted": "✓ Deleted from storage and session: {name}",
+        "sync_detached_del_err": "⚠ Error deleting file from storage ({uri}): {err}",
+        "project_conflict_ask": "⚠ Session was linked to {old}. You provided {new}. Replace project context? [Y/n]: ",
         "file_not_found": "Error: file not found: {path}",
         "file_unsupported": "⚠ Skipped unsupported file type: {path}",
         "file_read_err": "⚠ Error reading {path}: {err}",
@@ -351,9 +363,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "proj_structure_header": "Project Structure",
         "proj_contents_header": "Project File Contents",
         "banner_active": " replai v{ver} — session active",
-        "banner_commands": " Commands: /list /focus /send /save /md /apply /forget /session /history /help | exit",
+        "banner_commands": " Commands: /list /focus /send /save /md /apply /forget /sync /session /history /help | exit",
         "banner_mentions": " File mentions: @path directly in text (storage copy)",
-        "banner_keys": " Input: Enter — send | Alt+Enter (Shift+Enter) — new line",
+        "banner_shortcuts": " Newline: Shift+Enter / Alt+Enter. Submit: Enter.",
         "user_prompt": "\nYou: ",
         "session_ended": "\nSession finished.",
         "operation_interrupted": "\n[Operation interrupted]",
@@ -422,22 +434,17 @@ replai commands:
   /save [path]               — save code/media from last response to saved/ archive
   /md <file>                 — export last response to Markdown
   /apply <src> [dst]         — export files from saved/ into actual project
-  /forget <pattern>          — remove entry from session (file on disk is kept)
+  /forget <pattern>          — remove entry (detached files also deleted from cloud)
+  /sync [path]               — synchronize project or new folder with storage
   /session                   — session status and parameters
   /history                   — turn history of current session
   /help                      — cheatsheet
   exit | quit | /exit        — exit (generates summary)
 
 Input shortcuts:
-  Enter                      — send message
-  Alt+Enter / Shift+Enter    — soft line break (multiline input)
-  Pasting from clipboard     — preserves all indentation and line breaks
-
-@name — ALWAYS the storage version (Files API). If missing/expired in
-storage, you will be prompted to re-upload the local version.
-
-Media is auto-saved to media/.
-On name collision in /save: [o] overwrite, [k] new with turn ID, [s] skip.
+  Shift+Enter / Alt+Enter    — soft newline without submitting
+  Enter                      — send prompt to model
+  Arrow keys ↑ / ↓           — command history navigation
 """.strip(),
     },
 }
@@ -498,7 +505,7 @@ DEFAULT_LIMITS = {
 
 _REPL_COMMANDS = {
     "list", "focus", "send", "save", "md", "session", "history",
-    "help", "exit", "quit", "apply", "forget",
+    "help", "exit", "quit", "apply", "forget", "sync",
 }
 
 _MIME_TO_EXT = {
@@ -569,7 +576,6 @@ def sha256_of_file(path: str) -> str:
     return h.hexdigest()
 
 
-# A2 + A3: Детерминированная нормализация display_name без потери путей
 def normalize_display_name(name: str) -> str:
     s = (name or "").replace("\\", "/")
     s = re.sub(r"^(?:replai_)+", "replai_", s)
@@ -823,17 +829,30 @@ def extract_project_zip(zip_path: str, target_dir: str) -> str:
     return target_dir
 
 
-def scan_project(root, max_file_bytes, max_total_bytes, max_files,
-                 follow_symlinks=False, include_ide=False) -> list[dict]:
+def scan_project(
+    root: str,
+    max_file_bytes: int,
+    max_total_bytes: int,
+    max_files: int,
+    follow_symlinks: bool = False,
+    include_ide: bool = False,
+    include_ignored: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """Сканирует проект. Возвращает (included_files, gitignored_files)."""
     root = os.path.abspath(root)
     if os.path.isfile(root):
         kind = classify_file(root)
         if kind == "skip":
-            return []
-        return [{"rel_path": os.path.basename(root), "abs_path": root,
-                 "size": os.path.getsize(root), "kind": kind}]
+            return [], []
+        return [{
+            "rel_path": os.path.basename(root),
+            "abs_path": root,
+            "size": os.path.getsize(root),
+            "kind": kind,
+        }], []
+
     if not os.path.isdir(root):
-        return []
+        return [], []
 
     excluded = set(EXCLUDED_DIRS)
     if include_ide:
@@ -841,7 +860,10 @@ def scan_project(root, max_file_bytes, max_total_bytes, max_files,
         excluded.discard(".vscode")
 
     gitignore = _load_gitignore(root)
-    results, total, visited_real = [], 0, set()
+    results: list[dict] = []
+    ignored_results: list[dict] = []
+    total = 0
+    visited_real: set[str] = set()
 
     for dirpath, dirnames, filenames in os.walk(root, followlinks=follow_symlinks):
         if follow_symlinks:
@@ -851,16 +873,16 @@ def scan_project(root, max_file_bytes, max_total_bytes, max_files,
                 continue
             visited_real.add(real)
 
-        dirnames[:] = [d for d in dirnames
-                       if d not in excluded and not d.endswith(".egg-info")]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in excluded and not d.endswith(".egg-info")
+        ]
 
         for fn in sorted(filenames):
             abs_p = os.path.join(dirpath, fn)
             if os.path.islink(abs_p) and not follow_symlinks:
                 continue
             rel_p = os.path.relpath(abs_p, root).replace(os.sep, "/")
-            if gitignore and gitignore.match_file(rel_p):
-                continue
             if _is_excluded_filename(fn):
                 continue
             try:
@@ -871,21 +893,29 @@ def scan_project(root, max_file_bytes, max_total_bytes, max_files,
             if kind == "skip":
                 continue
             if sz > max_file_bytes:
-                print(tr("file_skipped_size",
-                         limit=human_size(max_file_bytes),
+                print(tr("file_skipped_size", limit=human_size(max_file_bytes),
                          path=rel_p, size=human_size(sz)), file=sys.stderr)
                 continue
+
+            entry = {"rel_path": rel_p, "abs_path": abs_p, "size": sz, "kind": kind}
+
+            is_git_ignored = bool(gitignore and gitignore.match_file(rel_p))
+            if is_git_ignored and not include_ignored:
+                ignored_results.append(entry)
+                continue
+
             if total + sz > max_total_bytes:
-                print(tr("proj_limit_bytes", limit=human_size(max_total_bytes)),
-                      file=sys.stderr)
-                return results
+                print(tr("proj_limit_bytes", limit=human_size(max_total_bytes)), file=sys.stderr)
+                return results, ignored_results
+
             if len(results) >= max_files:
                 print(tr("proj_limit_files", limit=max_files), file=sys.stderr)
-                return results
-            results.append({"rel_path": rel_p, "abs_path": abs_p,
-                            "size": sz, "kind": kind})
+                return results, ignored_results
+
+            results.append(entry)
             total += sz
-    return results
+
+    return results, ignored_results
 
 
 # ─── Manifest ─────────────────────────────────────────────────────────────
@@ -931,8 +961,7 @@ class Manifest:
         folder = os.path.basename(sdir.rstrip("/\\"))
         stored = data.get("session_id")
         if stored and stored != folder:
-            print(tr("session_id_mismatch", stored=stored, folder=folder),
-                  file=sys.stderr)
+            print(tr("session_id_mismatch", stored=stored, folder=folder), file=sys.stderr)
         return cls(sdir, data)
 
     def save(self):
@@ -1001,8 +1030,7 @@ class SessionLog:
         ensure_dir(os.path.dirname(path) or ".")
         self._f = open(path, "a", encoding="utf-8")
 
-    def write(self, tag: str, text: str, ts: datetime | None = None,
-              turn: int | None = None) -> None:
+    def write(self, tag: str, text: str, ts: datetime | None = None, turn: int | None = None) -> None:
         ts = ts or datetime.now()
         ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
         turn_str = f"[turn:{turn:03d}] " if turn is not None else ""
@@ -1087,25 +1115,108 @@ def _upload(client, abs_path, display_name):
         return None, None, None
 
 
-def sync_session(client, manifest: Manifest, args, dry_run=False) -> dict[str, int]:
+def _delete_cloud_file(client, file_uri_or_name: str) -> bool:
+    """Удаляет файл из Google Files API."""
+    if not file_uri_or_name:
+        return False
+    m = re.search(r"files/[a-zA-Z0-9_\-]+", file_uri_or_name)
+    resource_name = m.group(0) if m else file_uri_or_name
+    try:
+        client.files.delete(name=resource_name)
+        return True
+    except Exception as e:
+        print(tr("sync_detached_del_err", uri=file_uri_or_name, err=e), file=sys.stderr)
+        return False
+
+
+def sync_session(
+    client,
+    manifest: Manifest,
+    args: argparse.Namespace,
+    dry_run: bool = False,
+    extra_path: str | None = None,
+) -> dict[str, int]:
+    """
+    Ядро синхронизации (ТЗ Разделы 2, 4, 6).
+    Синхронизирует проект или указанный extra_path.
+    """
+    print(tr("sync_banner"))
+    session_id = manifest.data.get("session_id", make_session_id())
+    sdir = session_dir(session_id)
+
+    # 1. Сканирование путей для добавления
+    scan_targets = []
+    if extra_path:
+        scan_targets.append(os.path.abspath(extra_path))
+    elif manifest.data.get("project_path"):
+        scan_targets.append(manifest.data["project_path"])
+
+    for target in scan_targets:
+        if not os.path.exists(target):
+            continue
+        p_root = target
+        if os.path.isfile(target) and zipfile.is_zipfile(target):
+            extracted = os.path.join(sdir, "project_extracted")
+            p_root = extract_project_zip(target, extracted)
+        elif os.path.isfile(target):
+            p_root = os.path.abspath(target)
+
+        include_ignored_flag = getattr(args, "project_include_ignored", False)
+        scanned_files, ignored_files = scan_project(
+            p_root,
+            max_file_bytes=args.project_max_file_bytes,
+            max_total_bytes=args.project_max_total_bytes,
+            max_files=args.project_max_files,
+            follow_symlinks=args.project_follow_symlinks,
+            include_ide=args.project_include_ide_dirs,
+            include_ignored=include_ignored_flag,
+        )
+
+        # Обработка .gitignore (ТЗ Раздел 4, п. 2)
+        if ignored_files and not include_ignored_flag:
+            if sys.stdin.isatty() and not getattr(args, "yes", False):
+                ans = input(tr("sync_gitignore_ask", path=os.path.basename(p_root), count=len(ignored_files))).strip().lower()
+                if ans in ("y", "yes", "a", "all", "д", "да"):
+                    scanned_files.extend(ignored_files)
+
+        for f in scanned_files:
+            rel = f["rel_path"]
+            entry = {
+                "name": os.path.basename(f["abs_path"]),
+                "display_name": make_display_name(session_id, rel),
+                "local_path": f["abs_path"],
+                "abs_path": f["abs_path"],
+                "local_sha256": sha256_of_file(f["abs_path"]),
+                "kind": f["kind"],
+                "size": f["size"],
+                "mime": file_mime(f["abs_path"]),
+            }
+            manifest.add_file(entry)
+
+    # 2. Выявление статусов и сбор файлов для загрузки
     summary = {"ok": 0, "out-of-sync": 0, "new-local": 0, "detached": 0, "lost": 0}
+    detached_entries: list[dict] = []
+    pending_uploads: list[dict] = []
+
     for entry in manifest.files():
         if entry.get("source") == "generated":
             continue
         state = resolve_file_state(entry)
         summary[state] = summary.get(state, 0) + 1
         name = normalize_display_name(entry.get("display_name", "?"))
-        if state == "ok":
-            continue
+
         if state == "detached":
-            print(tr("sync_detached", name=name)); continue
-        if state == "lost":
-            print(tr("sync_lost", name=name)); continue
-        if dry_run:
-            print(f"[dry-run] {state}: {entry.get('local_path')}"); continue
-        if state == "out-of-sync":
-            if not args.yes and not ask_yes_no(tr("sync_ask_reupload", name=name), default=False):
-                continue
+            detached_entries.append(entry)
+        elif state == "lost":
+            print(tr("sync_lost", name=name))
+        elif state in ("new-local", "out-of-sync"):
+            pending_uploads.append(entry)
+
+    # 3. Загрузка с трехуровневым подтверждением (Все -> Папка -> Файл)
+    if pending_uploads and not dry_run:
+        def do_upload(entry):
+            state_before = resolve_file_state(entry)
+            name = normalize_display_name(entry.get("display_name", "?"))
             uri, sha, exp = _upload(client, entry["local_path"], entry["display_name"])
             if uri:
                 entry["files_api_uri"] = uri
@@ -1113,20 +1224,78 @@ def sync_session(client, manifest: Manifest, args, dry_run=False) -> dict[str, i
                 if exp: entry["expires_at"] = exp
                 entry["local_sha256"] = sha256_of_file(entry["local_path"])
                 entry["uploaded_at"] = now_iso()
-                print(tr("sync_reuploaded", name=name))
-        elif state == "new-local":
-            if not args.yes and not ask_yes_no(tr("sync_ask_upload", name=name), default=False):
-                continue
-            uri, sha, exp = _upload(client, entry["local_path"], entry["display_name"])
-            if uri:
-                entry["files_api_uri"] = uri
-                entry["files_api_sha256"] = sha
-                if exp: entry["expires_at"] = exp
-                entry["local_sha256"] = sha256_of_file(entry["local_path"])
-                entry["uploaded_at"] = now_iso()
-                print(tr("sync_uploaded", name=name))
+                if state_before == "out-of-sync":
+                    print(tr("sync_reuploaded", name=name))
+                else:
+                    print(tr("sync_uploaded", name=name))
+
+        upload_all = False
+        if not getattr(args, "yes", False) and sys.stdin.isatty():
+            upload_all = ask_yes_no(tr("sync_ask_upload_all", count=len(pending_uploads)), default=True)
+        else:
+            upload_all = True
+
+        if upload_all:
+            for entry in pending_uploads:
+                do_upload(entry)
+        else:
+            grouped = defaultdict(list)
+            for entry in pending_uploads:
+                d = os.path.dirname(entry["rel_path"])
+                grouped[d].append(entry)
+
+            for d, files in grouped.items():
+                d_name = d if d else ("(root)" if CURRENT_LANG == "en" else "(корень)")
+                dir_upload = False
+                if len(files) > 1:
+                    dir_upload = ask_yes_no(tr("sync_ask_upload_dir", count=len(files), dir=d_name), default=True)
+
+                for entry in files:
+                    if dir_upload:
+                        do_upload(entry)
+                    else:
+                        state_before = resolve_file_state(entry)
+                        prompt_key = "sync_ask_reupload" if state_before == "out-of-sync" else "sync_ask_upload"
+                        if ask_yes_no(tr(prompt_key, name=normalize_display_name(entry["display_name"])), default=False):
+                            do_upload(entry)
+
+    elif dry_run and pending_uploads:
+        for entry in pending_uploads:
+            print(f"[dry-run] {resolve_file_state(entry)}: {entry.get('local_path')}")
+
+    # 4. Обработка detached файлов (ТЗ Раздел 4, п. 4 и Раздел 6)
+    if detached_entries and not dry_run:
+        clean_detached_allowed = False
+        if not sys.stdin.isatty():
+            clean_detached_allowed = getattr(args, "sync_clean_detached", False)
+        else:
+            if getattr(args, "yes", False) and getattr(args, "sync_clean_detached", False):
+                clean_detached_allowed = True
+            else:
+                clean_detached_allowed = ask_yes_no(tr("sync_detached_ask", count=len(detached_entries)), default=False)
+
+        if clean_detached_allowed:
+            for entry in list(detached_entries):
+                d_name = normalize_display_name(entry.get("display_name", "?"))
+                uri = entry.get("files_api_uri")
+                if uri:
+                    _delete_cloud_file(client, uri)
+                try:
+                    manifest.files().remove(entry)
+                    print(tr("sync_detached_deleted", name=d_name))
+                except ValueError:
+                    pass
+        else:
+            for entry in detached_entries:
+                print(tr("sync_detached", name=normalize_display_name(entry.get("display_name", "?"))))
+
     if not dry_run:
         manifest.save()
+
+    print(tr("sync_summary"))
+    for k in ("ok", "out-of-sync", "new-local", "detached", "lost"):
+        print(f"  {k:<12}: {summary.get(k, 0)}")
+
     return summary
 
 
@@ -1334,6 +1503,10 @@ def parse_args(argv=None):
     p.add_argument("--dry-run", action="store_true", help=tr("dry_run_help"))
     p.add_argument("--sync-check", choices=["auto", "warn", "off"], default="auto",
                    help=tr("sync_check_help"))
+    p.add_argument("--project-include-ignored", action="store_true",
+                   help=tr("project_include_ignored_help"))
+    p.add_argument("--sync-clean-detached", action="store_true",
+                   help=tr("sync_clean_detached_help"))
     p.add_argument("--yes", "-y", action="store_true", help=tr("yes_help"))
     p.add_argument("--force", action="store_true", help=tr("force_help"))
     p.add_argument("--no-summary", action="store_true", help=tr("no_summary_help"))
@@ -1351,8 +1524,8 @@ def parse_args(argv=None):
     p.add_argument("--send-retries", type=int, default=4, help=tr("retries_help"))
     p.add_argument("--send-retry-delay", type=float, default=2.0, help=tr("retry_delay_help"))
 
-    p.add_argument("--project-max-file-bytes", type=int, default=200_000)
-    p.add_argument("--project-max-total-bytes", type=int, default=2_000_000)
+    p.add_argument("--project-max-file-bytes", type=int, default=6_000_000)
+    p.add_argument("--project-max-total-bytes", type=int, default=500_000_000)
     p.add_argument("--project-max-files", type=int, default=200)
     p.add_argument("--project-follow-symlinks", action="store_true")
     p.add_argument("--project-include-ide-dirs", action="store_true")
@@ -1775,7 +1948,7 @@ def cmd_apply(manifest, session_id, src_pattern, dst_path, project_root, args):
     save_dir = os.path.join(s_root, SAVED_SUBDIR)
     src_clean = (src_pattern or "").strip("\"'").rstrip("/")
 
-    candidates: dict[str, str] = {}  # rel_name -> absolute_source_path
+    candidates: dict[str, str] = {}
 
     if os.path.isdir(save_dir):
         for root_d, _, files_in_d in os.walk(save_dir):
@@ -1840,14 +2013,24 @@ def cmd_apply(manifest, session_id, src_pattern, dst_path, project_root, args):
     print(tr("apply_done", done=copied, total=len(plan)))
 
 
-# ─── F6: /forget ─────────────────────────────────────────────────────────
-def _forget_entry(manifest, entry, args, dry_run=False):
+# ─── F6: /forget (Удаление из манифеста и облака при detached) ─────────────
+def _forget_entry(client, manifest, entry, args, dry_run=False):
     name = normalize_display_name(entry.get("display_name", "?"))
-    if entry.get("source") == "generated" and not args.force:
+    is_generated = entry.get("source") == "generated"
+    is_detached = resolve_file_state(entry) == "detached"
+
+    if is_generated and not args.force:
         if not args.yes and not ask_yes_no(tr("forget_generated_warn", name=name), default=False):
             return False
+
     if dry_run:
-        print(tr("forget_dry_run", name=name)); return True
+        print(tr("forget_dry_run", name=name))
+        return True
+
+    # ТЗ Раздел 5: Для detached файлов вызываем client.files.delete()
+    if is_detached and entry.get("files_api_uri"):
+        _delete_cloud_file(client, entry["files_api_uri"])
+
     try:
         manifest.files().remove(entry)
         print(tr("forget_done", name=name))
@@ -1856,7 +2039,7 @@ def _forget_entry(manifest, entry, args, dry_run=False):
         return False
 
 
-def cmd_forget(manifest, arg, args, dry_run=False):
+def cmd_forget(client, manifest, arg, args, dry_run=False):
     if not arg:
         print(tr("forget_usage")); return
     matched = manifest.find_all_files(arg)
@@ -1869,7 +2052,7 @@ def cmd_forget(manifest, arg, args, dry_run=False):
 
     changed = False
     for f in list(matched):
-        if _forget_entry(manifest, f, args, dry_run=dry_run):
+        if _forget_entry(client, manifest, f, args, dry_run=dry_run):
             changed = True
     if changed and not dry_run:
         manifest.save()
@@ -2002,93 +2185,6 @@ def session_menu(match_project=None, allow_new_option=True, header=None):
         return ans
 
 
-# ─── REPL Prompt / Multiline Helpers ─────────────────────────────────────
-def _create_prompt_session():
-    """Создаёт PromptSession с поддержкой Shift+Enter и Alt+Enter."""
-    if not HAS_PROMPT_TOOLKIT:
-        return None
-
-    bindings = KeyBindings()
-
-    # Alt+Enter (Escape, Enter) -> мягкий перенос строки
-    @bindings.add("escape", "enter")
-    def _insert_newline_alt(event):
-        event.current_buffer.insert_text("\n")
-
-    # Ctrl+J (LF) -> альтернатива переноса строки
-    @bindings.add("c-j")
-    def _insert_newline_ctrl_j(event):
-        event.current_buffer.insert_text("\n")
-
-    # Enter -> отправка (validate_and_handle), если текст не пустой
-    @bindings.add("enter")
-    def _handle_enter(event):
-        buf = event.current_buffer
-        if buf.text.strip():
-            buf.validate_and_handle()
-
-    # Ctrl+C -> очистить буфер, если есть текст; если пуст — прервать ввод
-    @bindings.add("c-c")
-    def _handle_c_c(event):
-        buf = event.current_buffer
-        if buf.text:
-            buf.reset()
-        else:
-            event.app.exit(exception=KeyboardInterrupt, style="class:aborting")
-
-    # Ctrl+D -> выход, только если буфер пуст
-    @bindings.add("c-d")
-    def _handle_c_d(event):
-        buf = event.current_buffer
-        if not buf.text:
-            event.app.exit(exception=EOFError, style="class:aborting")
-
-    return PromptSession(
-        multiline=True,
-        key_bindings=bindings,
-        prompt_continuation="... ",
-        history=InMemoryHistory(),
-    )
-
-
-def multiline_input_fallback(prompt: str) -> str:
-    """Fallback для ввода, если prompt_toolkit не установлен."""
-    first_line = input(prompt)
-    if not first_line:
-        return ""
-
-    # Перенос строки, если в конце стоит обратный слэш '\'
-    if first_line.endswith("\\"):
-        lines = [first_line[:-1]]
-        while True:
-            try:
-                next_line = input("... ")
-            except (EOFError, KeyboardInterrupt):
-                break
-            if next_line.endswith("\\"):
-                lines.append(next_line[:-1])
-            else:
-                lines.append(next_line)
-                break
-        return "\n".join(lines)
-
-    # Многострочный ввод в тройных кавычках
-    if first_line.startswith('"""') and not (len(first_line) > 3 and first_line.endswith('"""')):
-        lines = [first_line[3:]]
-        while True:
-            try:
-                next_line = input("... ")
-            except (EOFError, KeyboardInterrupt):
-                break
-            if next_line.endswith('"""'):
-                lines.append(next_line[:-3])
-                break
-            lines.append(next_line)
-        return "\n".join(lines)
-
-    return first_line
-
-
 # ─── REPL ────────────────────────────────────────────────────────────────
 def print_banner(session_id, manifest, args, project_root=None):
     summary = manifest.data.get("summary")
@@ -2113,7 +2209,7 @@ def print_banner(session_id, manifest, args, project_root=None):
     print("═" * 65)
     print(tr("banner_commands"))
     print(tr("banner_mentions"))
-    print(tr("banner_keys"))
+    print(tr("banner_shortcuts"))
     print("═" * 65)
 
 
@@ -2164,6 +2260,36 @@ def _parse_apply_args(body):
     return tokens[0], tokens[1]
 
 
+def _create_prompt_session() -> PromptSession | None:
+    if not HAS_PROMPT_TOOLKIT:
+        return None
+
+    bindings = KeyBindings()
+
+    @bindings.add("escape", "c-m")
+    @bindings.add("escape", "enter")
+    @bindings.add("c-j")
+    def _insert_newline(event):
+        event.current_buffer.insert_text("\n")
+
+    @bindings.add("c-m")
+    @bindings.add("enter")
+    def _submit(event):
+        buf = event.current_buffer
+        if buf.text.strip():
+            buf.validate_and_handle()
+
+    def get_continuation(width, line_number, is_soft_wrap):
+        return "... "
+
+    return PromptSession(
+        history=InMemoryHistory(),
+        multiline=True,
+        key_bindings=bindings,
+        prompt_continuation=get_continuation,
+    )
+
+
 def run_repl(client, chat, manifest, session_id, save_root, project_root, args, log):
     sdir = session_dir(session_id)
     print_banner(session_id, manifest, args, project_root)
@@ -2174,31 +2300,23 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
     while True:
         try:
             if prompt_session:
-                try:
-                    raw = prompt_session.prompt(message=tr("user_prompt")).strip()
-                except KeyboardInterrupt:
-                    print()
-                    continue
+                raw = prompt_session.prompt(tr("user_prompt")).strip()
             else:
-                try:
-                    raw = multiline_input_fallback(tr("user_prompt")).strip()
-                except KeyboardInterrupt:
-                    print()
-                    continue
-        except EOFError:
+                first_line = input(tr("user_prompt"))
+                lines = [first_line]
+                while lines[-1].endswith("\\"):
+                    lines[-1] = lines[-1][:-1]
+                    lines.append(input("... "))
+                raw = "\n".join(lines).strip()
+        except (EOFError, KeyboardInterrupt):
             _finalize_session(chat, manifest, args)
-            print(tr("session_ended"))
-            break
-        except KeyboardInterrupt:
-            print()
-            continue
+            print(tr("session_ended")); break
 
         if not raw:
             continue
         if raw.lower() in ("exit", "quit", "/exit"):
             _finalize_session(chat, manifest, args)
-            print(tr("session_ended"))
-            break
+            print(tr("session_ended")); break
 
         try:
             if raw == "/help":
@@ -2209,6 +2327,12 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
                 cmd_session_info(session_id, manifest, args, project_root); continue
             if raw == "/history":
                 cmd_history(manifest); continue
+
+            # /sync (REPL command)
+            if raw == "/sync" or raw.startswith("/sync "):
+                target_p = raw[5:].strip().strip("\"'") or None
+                sync_session(client, manifest, args, dry_run=args.dry_run, extra_path=target_p)
+                continue
 
             # /focus
             if raw == "/focus" or raw.startswith("/focus "):
@@ -2302,7 +2426,7 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
                 tokens = [t for t in tokens if t != "--dry-run"]
                 if not tokens:
                     print(tr("forget_usage")); continue
-                cmd_forget(manifest, tokens[0], args, dry_run=dry)
+                cmd_forget(client, manifest, tokens[0], args, dry_run=dry)
                 continue
 
             if raw.startswith("/"):
@@ -2335,6 +2459,11 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
 
 # ─── Main ────────────────────────────────────────────────────────────────
 def _resolve_session_arg(args, match_project):
+    sync_implicit_continue = (
+        args.sync and not args.resume and not args.continue_last
+        and not args.new and not args.project
+    )
+
     if args.resume:
         sid = args.resume
         if sid == "__interactive__":
@@ -2356,7 +2485,7 @@ def _resolve_session_arg(args, match_project):
             return None, None, False
         return sid, m, True
 
-    if args.continue_last:
+    if args.continue_last or sync_implicit_continue:
         rows = _collect_session_rows(match_project)
         if not rows:
             print(tr("continue_no_session"), file=sys.stderr)
@@ -2368,7 +2497,7 @@ def _resolve_session_arg(args, match_project):
             return None, None, False
         return latest, m, True
 
-    if args.new or args.sync:
+    if args.new:
         sid = make_session_id()
         m = Manifest.new(session_dir(sid), sid, args.model, args.project)
         m.save()
@@ -2414,6 +2543,17 @@ def main(argv=None):
     save_root = ensure_dir(os.path.join(sdir, SAVED_SUBDIR))
     ensure_dir(os.path.join(sdir, MEDIA_SUBDIR))
 
+    # Конфликт смены проекта
+    stored_proj = manifest.data.get("project_path")
+    if args.project:
+        new_proj_abs = os.path.abspath(args.project)
+        if stored_proj and os.path.normcase(stored_proj) != os.path.normcase(new_proj_abs):
+            if ask_yes_no(tr("project_conflict_ask", old=stored_proj, new=new_proj_abs), default=True):
+                manifest.data["project_path"] = new_proj_abs
+                manifest.save()
+            else:
+                args.project = stored_proj
+
     active_project_path = args.project or manifest.data.get("project_path")
     project_files = []
     project_root = None
@@ -2431,16 +2571,18 @@ def main(argv=None):
 
         if os.path.exists(project_root):
             print(tr("scanning_proj", path=active_project_path))
-            project_files = scan_project(
+            include_ignored_flag = getattr(args, "project_include_ignored", False)
+            scanned_files, _ = scan_project(
                 project_root,
                 max_file_bytes=args.project_max_file_bytes,
                 max_total_bytes=args.project_max_total_bytes,
                 max_files=args.project_max_files,
                 follow_symlinks=args.project_follow_symlinks,
                 include_ide=args.project_include_ide_dirs,
+                include_ignored=include_ignored_flag,
             )
-            print(tr("indexed_files", count=len(project_files)))
-            for f in project_files:
+            print(tr("indexed_files", count=len(scanned_files)))
+            for f in scanned_files:
                 entry = {
                     "name": os.path.basename(f["abs_path"]),
                     "display_name": make_display_name(session_id, f["rel_path"]),
@@ -2452,6 +2594,7 @@ def main(argv=None):
                 manifest.add_file(entry)
             manifest.data["project_path"] = os.path.abspath(active_project_path)
             manifest.save()
+            project_files = scanned_files
 
     if not project_files and manifest.files():
         for f in manifest.files():
@@ -2468,13 +2611,12 @@ def main(argv=None):
             if os.path.isfile(project_root) and zipfile.is_zipfile(project_root):
                 project_root = os.path.join(sdir, "project_extracted")
 
+    # Обработка флага --sync
     if args.sync:
-        print(tr("sync_banner"))
-        summary = sync_session(client, manifest, args, dry_run=args.dry_run)
-        print(tr("sync_summary"))
-        for k in ("ok", "out-of-sync", "new-local", "detached", "lost"):
-            print(f"  {k:<12}: {summary.get(k, 0)}")
-        log.close(); return 0
+        sync_session(client, manifest, args, dry_run=args.dry_run)
+        if not sys.stdin.isatty():
+            log.close()
+            return 0
 
     history_contents = []
     if resumed:

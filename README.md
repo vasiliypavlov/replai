@@ -14,7 +14,7 @@
 результат работы обратно в реальный проект, и переживает падения через
 `resume` + `sync`.
 
-**Версия:** `0.0.2`. **Python:** `3.10+`.
+**Версия:** `0.0.4`. **Python:** `3.10+`.
 
 ### Зачем это нужно
 
@@ -28,6 +28,7 @@
   дорогой результат генерации;
 - **даёт выгрузить результат** — `/save` для архива сессии, `/apply` для
   реального проекта, `/md` для Markdown-отчёта;
+- **готовит контекст** — `/sync` загружает большие датасеты в облако AI Studio, не сжигая токены модели прямо сейчас;
 - **переживает сбои** — сессия продолжается после Ctrl+C, kill, обрыва SSH;
 - **помнит сессии** — на выходе генерируется summary, при запуске показывается
   меню всех сессий с описаниями.
@@ -140,10 +141,6 @@ prompt-toolkit>=3.0.0
 **Префикс `replai_` есть только в `display_name`** — метке в Files API.
 В имени папки, в аргументах команд, в баннере — чистый timestamp.
 
-`Manifest.new` отказывается принимать `session_id` не по формату
-`^\d{8}_\d{6}$`, а `make_display_name` терпит любое число префиксов на входе,
-но всегда создаёт ровно один на выходе.
-
 #### Локальный файл vs облачный файл
 
 - **Локальный** — на вашем диске, `local_path`. Источник правды.
@@ -155,10 +152,6 @@ prompt-toolkit>=3.0.0
 ловится автоматически (`out-of-sync`). Если в хранилище нет копии
 (`new-local`) или копия устарела (`out-of-sync`), `replai` предложит
 перезалить.
-
-`display_name` в облаке = `replai_<session_id>_<путь>`. Служит для двух
-целей: (1) отличить наши файлы от чужих в общем хранилище GCP-проекта,
-(2) при поиске нормализоваться обратно до чистого пути `<путь>`.
 
 #### `@name` — всегда облачная версия (важнейшее правило)
 
@@ -185,22 +178,13 @@ prompt-toolkit>=3.0.0
 перезалить с диска — **одно нажатие Enter**. Пользователю не нужно думать о
 48-часовом лимите.
 
-Если облачного файла нет вообще и перезалить нечем (нет локальной копии):
-предупреждение + `[Y/n]` — отправить сообщение всё равно (например,
-`@Image1` в промпте для WAN — это не файл, а часть текста). `Enter` =
-отправить как есть.
-
 #### Медиа автосохраняется всегда
 
 Как только модель возвращает изображение/видео/аудио в ответе, оно
 **немедленно** пишется в
 `replai/sessions/<id>/media/<timestamp>_turnNNN_MMM.<ext>`. Это **не**
 `/save` — `/save` по запросу пользователя. Это страховка от потери:
-сгенерированные картинки невоспроизводимы (seed потерян).
-
-Каждое сохранение сопровождается строкой `[MEDIA]` в `log.txt` с тем же
-timestamp и номером хода, что в имени файла — можно найти «к какому ответу
-относится этот файл» простым `grep`.
+сгенерированные картинки невоспроизводимы.
 
 Автосохранённое медиа сразу появляется в `/list` (с `src=gen`), доступно
 для `/focus`, `/save`, `@`.
@@ -208,13 +192,12 @@ timestamp и номером хода, что в имени файла — мож
 #### Три «выхода» из сессии
 
 - **`/save`** — архив сессии (`saved/<path>`). Для истории, резервных
-  копий, сравнения версий через `[o/k/s]` при совпадении имени.
+  копий, сравнения версий.
 - **`/apply`** — выгрузка в реальный проект. Куда указали — туда и
   скопировалось. По умолчанию — в `--project`.
 - **`/md`** — Markdown-отчёт из последнего ответа.
 
-Три разных адресата — три разные команды. `/save` не трогает проект, `/apply`
-не трогает архив, `/md` не трогает ни то, ни другое.
+Три разных адресата — три разные команды.
 
 ---
 
@@ -233,16 +216,12 @@ timestamp и номером хода, что в имени файла — мож
 «файл не найден»). При чтении файла проверяются права: если файл доступен
 группе/остальным (`mode & 0o077`) — предупреждение `chmod 600`.
 
-**Почему так:** ключ в `ps aux` и `~/.bash_history` — утечка навсегда.
-Только файл с ограниченными правами или переменная окружения.
-
 ---
 
 ### Язык интерфейса
 
 `ru` (по умолчанию) и `en`. Переключается через `--lang` или
-`REPLAI_LANG=en replai`. Локализовано всё: справка, меню, баннер, команды,
-промпты к модели, ошибки, summary.
+`REPLAI_LANG=en replai`.
 
 ---
 
@@ -255,13 +234,9 @@ timestamp и номером хода, что в имени файла — мож
 загрузка конкретной.
 
 **`--project PATH`** фильтрует меню: показываются только сессии с этим
-проектом (`os.path.normcase(abspath())`).
+проектом.
 
 **`--resume` без ID** — то же меню, но без пункта «новая» (Enter — отмена).
-
-Меню **не показывается** при: `--new` (сразу новая), `--sync` (batch),
-`--resume <id>` (прямая загрузка), `--continue` (последняя), не-TTY (pipe,
-CI).
 
 ---
 
@@ -272,16 +247,11 @@ CI).
 сохраняет в `manifest.json` (`summary`, `summary_at`).
 
 **Зачем:** пользователь возвращается через день и хочет понять «что было в
-той сессии» — без чтения лога. Summary видно в меню, `/session`, баннере.
-
-**Что НЕ происходит:** не пишется в `history` (это метаданные), не сохраняет
-медиа, не перегенерируется, если манифест не менялся, не блокирует выход при
-ошибке.
+той сессии» — без чтения лога.
 
 **Отключить:** `--no-summary`.
 
-**Не генерируется**, если: сессия пустая, Ctrl+C (прерывание — не выход),
-последний ход — user без model (после rollback).
+**Не генерируется**, если: сессия пустая, Ctrl+C (прерывание — не выход).
 
 ---
 
@@ -302,15 +272,21 @@ CI).
 | `--new` | off | Сразу новая, без меню |
 | `--no-summary` | off | Без summary на выходе |
 | `--lang {ru,en}` | `ru` | Язык |
-| `--help` / `--version` | — | Справка / версия |
 
-#### Синхронизация
+#### Синхронизация (CLI)
 
 | Опция | По умолчанию | Описание |
 |---|---|---|
-| `--sync` | off | Разовый проход по манифесту + выход |
+| `--sync` | off | Синхронизировать файлы проекта с хранилищем |
 | `--dry-run` | off | Показать без действий |
 | `--sync-check {auto,warn,off}` | `auto` | Политика при использовании файла |
+| `--project-include-ignored` | off | Загружать файлы из `.gitignore` без вопросов |
+| `--sync-clean-detached` | off | Разрешить удаление detached-файлов для очистки квоты |
+
+**Особенности `--sync`:**
+- В интерактивном терминале (TTY) `--sync` **не завершает работу**: он проводит синхронизацию и **запускает чат**.
+- В режиме CI (без TTY) `--sync` делает работу и **завершается** (код 0).
+- Запуск просто `replai --sync` без других флагов автоматически подхватывает последнюю сессию (эквивалент `--continue --sync`).
 
 **Статусы файла** (`source != generated`):
 
@@ -322,49 +298,20 @@ CI).
 | нет | есть | — | `detached` | использовать URI |
 | нет | нет | — | `lost` | ошибка |
 
-`detached` **никогда** не предлагает «обновить» — нечего, локальной версии
-нет. Это сценарий размонтированной папки или удалённого файла: используется
-копия из хранилища.
-
-Медиа `source=generated` всегда `ok` и **пропускается** в `--sync` — оно уже
-на диске.
-
-#### Ретраи
+#### Сканирование проекта
 
 | Опция | По умолчанию |
 |---|---|
-| `--send-retries N` | `4` |
-| `--send-retry-delay F` | `2.0` сек |
+| `--project-max-file-bytes` | `6_000_000` (6 МБ) |
+| `--project-max-total-bytes` | `500_000_000` (500 МБ) |
+| `--project-max-files` | `200` |
+| `--project-follow-symlinks` | off |
+| `--project-include-ide-dirs` | off (`.idea/`, `.vscode/` исключены) |
 
-Backoff `2 → 4 → 8 → 16` сек. Триггеры по подстроке: `503`, `UNAVAILABLE`,
-`429`, `RESOURCE_EXHAUSTED`, `Deadline Exceeded`, `timeout`, `high demand`,
-`overloaded`. Остальное — пробрасывается без ретраев.
+> **Примечание:** Лимиты 6 МБ на файл и 500 МБ на проект по умолчанию настроены для комфортной работы с датасетами изображений. Если вы работаете только с текстом, их можно уменьшить для экономии памяти.
 
-#### Лимиты `/send`
-
-`--limit-image-mb` (20), `--limit-video-mb` (500), `--limit-text-kb` (200),
-`--limit-archive-mb` (200), `--limit-inline-total-mb` (18),
-`--limit-request-total-mb` (500).
-
-При превышении — `[y/N]`. Флаг `-y`/`--yes` пропускает подтверждения (для CI).
-
-**Правило доставки бинарных файлов:**
-- `size <= --limit-inline-total-mb` → байты в запросе (`Part.from_bytes`);
-- иначе → `client.files.upload` + `Part.from_uri`.
-
-Порог 18 МБ (а не 20) — запас под остальной текст запроса, чтобы не упереться
-в жёсткий лимит Gemini (20 МБ на весь запрос).
-
-#### Сканирование проекта
-
-`--project-max-file-bytes` (200 КБ), `--project-max-total-bytes` (2 МБ),
-`--project-max-files` (200), `--project-follow-symlinks` (off),
-`--project-include-ide-dirs` (off).
-
-`.gitignore` учитывается (если `pathspec` установлен). Жёстко исключены:
-`.git/`, `__pycache__/`, `.venv/`, `node_modules/`, `dist/`, `*.pyc`, `*.so`,
-`*.log`, и т.п. Симлинки по умолчанию **не** разыменовываются; с
-`--project-follow-symlinks` — с защитой от циклов.
+`.gitignore` учитывается. Жёстко исключены: `.git/`, `__pycache__/`, `.venv/`,
+`node_modules/`, `dist/`, `*.pyc`, `*.so`, `*.log`, и т.п.
 
 **`--project` = папка** — используется напрямую (не копируется в сессию).
 **`--project` = `.zip`** — распаковывается в `<session_dir>/project_extracted/`.
@@ -378,161 +325,65 @@ Backoff `2 → 4 → 8 → 16` сек. Триггеры по подстроке:
 | `/list` | Список файлов сессии |
 | `/focus <pattern> [текст]` | Сфокусироваться на файле с инструкцией |
 | `@<path>` в тексте | Упоминание облачной версии файла |
-| `/send <path...> [--text X]` | Добавить новый файл(ы) в сессию и отправить |
+| `/send <path...> [--text X]` | Добавить новый файл(ы) и отправить |
+| `/sync [path]` | Синхронизировать проект с хранилищем (не отправляя модели) |
 | `/save [path]` | Сохранить код/медиа ответа в архив `saved/` |
 | `/md <file>` | Сохранить весь ответ как Markdown |
 | `/apply <src> [dst]` | Выгрузить файлы из `saved/` в проект |
-| `/forget <pattern>` | Убрать запись из сессии (файл на диске не трогается) |
+| `/forget <pattern>` | Убрать запись из сессии (detached-файлы удаляются и из облака) |
 | `/session` | Информация о сессии |
-| `/history` | История ходов (последние 15, с turn ID) |
+| `/history` | История ходов (последние 15) |
 | `/help` | Справка |
 | `exit` / `quit` / `/exit` | Выход (генерирует summary) |
 
-Все команды начинаются с `/`. Для многострочного ввода — см. «Ввод текста».
+#### `/sync [path]` — подготовка датасета
 
-#### `/list` — список файлов сессии
+Команда решает проблему: «Как загрузить 78 картинок в AI Studio, не отправляя их модели сразу (чтобы не сжечь контекст)?».
 
-Таблица: `#` (индекс для `#N`), тип, src (`in`/`gen`), статус (sync-статус
-для input, `ok` для generated), размер, нормализованное имя.
+**Логика работы:**
+1. Сканирует папку `--project` (или указанный `[path]`).
+2. Если находит файлы, указанные в `.gitignore` (например, `dataset/`), **спрашивает разрешение** на их синхронизацию (потому что `.gitignore` — это для GitHub, а не для AI Studio).
+3. Загружает всё в Files API и регистрирует в `manifest.json`.
+4. **Ничего не отправляет модели.** Теперь вы можете точечно обращаться к файлам через `@` или `/focus`.
 
-`src=in` — из проекта или `/send`. `src=gen` — сгенерировано моделью.
+**Трехуровневое подтверждение загрузки:**
+Если скрипт находит много новых или измененных файлов, он не заставляет вас нажимать `y` на каждый:
+1. **Все:** «Найдено 78 файлов. Загрузить все? [Y/n]» (Enter — да).
+2. **Папка:** Если вы ответили `n`, он сгруппирует файлы по папкам: «Загрузить все 70 файлов в папке 'dataset'?».
+3. **Файл:** Только если вы отказались от всей папки, начнется перебор по одному.
 
-#### `/focus <pattern> [текст]` — прицельная отправка файла
-
-Отправить один файл модели с инструкцией. `pattern` — `#N` (индекс из
-`/list`), точное имя, basename, glob, или `replai_<sid>_<path>`
-(нормализуется).
-
-Перед отправкой проверяется статус:
-
-- `ok` → отправка;
-- `out-of-sync` + `--sync-check auto` → спросит «обновить в хранилище?»;
-- `warn` → только предупредит;
-- `off` → молча отправит локальную;
-- `detached` → использовать URI из хранилища;
-- `lost` → ошибка.
-
-**Зачем отдельно от `/send`:** `/focus` не добавляет новый файл — он
-**возвращает внимание** к уже известному. Полезно для итеративной отладки
-одного файла из большого датасета.
-
-#### `@name` в тексте — упоминание облачной версии
-
-Распознаётся в начале строки или после пробела/`(`/`[`/кавычки.
-`user@example.com` не ломается. Trailing-пунктуация (`@main.py,`) отрезается.
-
-**Что делает:** ищет файл в манифесте, проверяет `files_api_uri` и
-`expires_at`, при необходимости предлагает перезалить. Вставляет
-`[MENTION] <path> (версия из хранилища)` + содержимое из Files API.
-
-**Отличие от `/send`:** `/send path` прикладывает **свежий локальный**
-файл. `@name` в тексте — **облачную копию**. Это **разные файлы**, если
-содержимое расходится. См. «Ключевые концепции».
-
-#### `/send <path...> [--text X]` — добавить файл в сессию
-
-Синтаксис:
-
-```
-/send "file.png" Привет
-/send "a.png" "b.png" --text Сравни
-/send "my file with spaces.png" test
-```
-
-Правила парсинга: если есть `--text` — всё до него пути, всё после — текст.
-Иначе: токен в кавычках → путь; без кавычек существующий файл → путь; иначе
-→ начало текста.
-
-По типу: text инлайнится в промпт; archive распаковывается в память;
-image/video/audio/binary — inline или Files API по размеру.
-
-**Если в тексте есть `@name`** (например, `/send "test_report.md" что в
-@test_report.md`) — обе версии уйдут модели с явными метками: `[FILE]`
-(локальная, свежая) + `[MENTION]` (облачная, старая). Модель видит их как
-**разные файлы** и не путает.
-
-Если `@name` не найден в сессии/хранилище — предупреждение + `[Y/n]`. Enter
-= отправить без упоминания (для промптов типа `@Image1` где `@` — часть
-текста).
-
-#### `/save [path]` — архив последнего ответа
-
-**Без аргумента:** все блоки кода + все медиа из последнего ответа. Показ
-плана, `[y/N]`.
-
-**С аргументом:** сначала ищет в сессии (по имени, индексу, glob), затем в
-блоках ответа. Найдено → `shutil.copy2` в `saved/<path>`.
-
-**При совпадении имени:** `[o]` перезаписать / `[k]` новый с ID хода
-(`main_t003.py`, старый цел) / `[s]` пропустить. Идентичное содержимое
-пропускается молча (`⏭ Без изменений`).
-
-**Куда:** `replai/sessions/<id>/saved/`. **Не** в проект, **не** в хранилище.
-
-**Зачем:** архив в сессии. Для истории, для сравнения версий. Если нужно в
-**проект** — используйте `/apply`.
-
-#### `/apply <src> [dst]` — выгрузка в проект
-
-**Направление:** `<session>/saved/` → `<dst>/`. Это **выход из сессии в
-реальность**.
-
-**`src`** — паттерн в сессии: имя, `<dir>/` (все файлы в папке), `#N`, glob.
-
-**`dst`** — куда копировать. Если не указан — в `--project`:
-- если `--project` = папка → в неё;
-- если `--project` = `.zip` → в `<session>/project_extracted/`.
-
-**Поведение:** показывает план (`new` / `CONFLICT`), спрашивает `[y/N]`.
-При конфликте — `[y/N]` per file (обходится `--force`/`--yes`).
-
-**`--dry-run`** — только план, без копирования.
-
-**Зачем отдельно от `/save`:** `/save` = «хочу архив», `/apply` = «хочу в
-рабочий проект». Разные адресаты — разные команды.
+**Удаление «мусора» (detached):**
+Если вы удалили файл локально, но он остался в сессии, `/sync` предупредит об этом в конце и предложит удалить его из AI Studio, чтобы освободить квоту (по умолчанию — нет).
 
 #### `/forget <pattern>` — убрать из сессии
 
-Удаляет запись из `manifest.files()`. **Не** удаляет с диска
-(`local_path`), **не** удаляет из Files API. Только убирает из контекста:
-после `/forget` файл не находится в `/list`, `@`, `/focus`, `/save`.
+Умное удаление:
+- Если файл **есть на диске**: удаляет только запись из `manifest.json` (файл на диске и облачная копия остаются нетронутыми).
+- Если файл **отсутствует на диске** (`detached`): удаляет запись из манифеста **и** вызывает `client.files.delete()` для очистки квоты в AI Studio.
 
-Для `source=generated` — отдельное подтверждение (файл в `media/` остаётся).
+#### `/apply <src> [dst]` — выгрузка в проект
 
-**Зачем:** очистить сессию от лишних записей, не трогая реальные файлы.
-Полезно в долгих сессиях и при исчерпании квоты 20 ГБ в Files API (убрать
-запись → перезалить с локальной).
+**Направление:** `<session>/saved/` → `<dst>/`.
 
-`--dry-run` — только показать.
+**`src`** — паттерн в сессии: имя, `<dir>/` (все файлы в папке), `#N`, glob.
+**`dst`** — куда копировать. Если не указан — в `--project`.
 
-#### `/md <file>` — Markdown-экспорт
+#### `/save [path]` — архив последнего ответа
 
-Сохраняет `LAST_RESPONSE["text"]` в файл.
+**Без аргумента:** все блоки кода + все медиа из последнего ответа. Показ плана, `[y/N]`.
+**С аргументом:** сначала ищет в сессии, затем в блоках ответа.
 
-- Без явного пути (`/md report.md`) → `saved/report.md`.
-- С явным путём (`/md ./out.md`, `/md ~/docs/x.md`, `/md C:\x.md`) → путь
-  как есть, `~` раскрывается, вложенные папки создаются.
+**При совпадении имени:** `[o]` перезаписать / `[k]` новый с ID хода (`main_t003.py`) / `[s]` пропустить. Идентичное содержимое пропускается молча.
 
-В выводе **абсолютный** путь и размер — пользователь видит, куда реально
-ушёл файл.
+#### `/focus <pattern> [текст]` — прицельная отправка файла
 
-#### `/session` — информация о сессии
+Отправить один файл модели с инструкцией. `pattern` — `#N` (индекс из `/list`), точное имя, basename, glob.
 
-ID, summary, дата, модель, проект, счётчики файлов/ходов/медиа, пути
-манифеста/лога/saved/media, готовая строка `replai --resume <id>` для
-копипаста.
+**Зачем отдельно от `/send`:** `/focus` не добавляет новый файл — он **возвращает внимание** к уже известному. Полезно для итеративной отладки одного файла из большого датасета.
 
-#### `/history` — последние 15 ходов
+#### `@name` в тексте — упоминание облачной версии
 
-С `[turn:N]` — номер хода, совпадает с `turnNNN` в именах медиафайлов и
-`file_tNNN` при `/save` с `[k]`. Позволяет сопоставить артефакт с ходом.
-
-#### `/help` — шпаргалка
-
-#### `exit` / `quit` / `/exit` — выход
-
-Три эквивалентных способа. Генерирует summary. Ctrl+D — тоже с summary.
-Ctrl+C — прерывает операцию, не выходит.
+Вставляет `[MENTION] <path> (версия из хранилища)` + содержимое из Files API. Если копия истекла, предложит перезалить.
 
 ---
 
@@ -549,105 +400,14 @@ replai/
         └── project_extracted/        ← только для --project *.zip
 ```
 
-Всё видимое, всё портативное.
-
----
-
-### Устойчивость к сбоям
-
-- **Ретраи 503/429** — экспоненциальный backoff.
-- **Атомарная запись манифеста** через `.tmp` → `os.replace`.
-- **Инкрементальная запись** после каждого действия.
-- **Rollback хода при Ctrl+C** — orphan user-запись удаляется из `history`,
-  чтобы summary и resume работали с консистентной историей.
-- **Автоочистка устаревших `files_api_uri`** при изменении локального SHA
-  (`add_file`) — старый URI не будет «фантомно» использован.
-- **Предупреждение при text-fallback на URI** — если локальный файл
-  недоступен, `replai` явно скажет, что использует версию из хранилища.
-
----
-
-### Примеры
-
-#### Отладка по одному файлу из большого датасета
-
-```
-/list
-/focus "Five of Wands.jpg" Скрипт выдаёт красный фон вместо белого
-```
-
-#### Сравнение двух файлов в одном вопросе
-
-```
-Почему в @prepress/lift.py функция lift() для @Five\ of\ Wands.jpg
-даёт красный фон, а для @Six\ of\ Wands.jpg — белый?
-```
-
-#### Генерация и сохранение изображения
-
-```
-Сгенерируй открытку с драконом в стиле industrial, 512x512
-# [1 медиафайл автосохранён в media/]
-
-/save
-# Сохранит картинку в saved/
-```
-
-#### Синхронизация после правок
-
-```bash
-replai --project ./proj --sync --yes
-```
-
-#### Восстановление после падения
-
-```bash
-replai --resume                       # меню всех сессий
-replai --resume 20261107_142305       # конкретная
-replai --session 20261107_142305      # алиас
-replai --continue                     # последняя
-```
-
-#### CI-режим (без интерактива)
-
-```bash
-replai --yes --project ./proj --sync
-```
-
-`--yes` автоматически:
-- выбирает «новую сессию» в меню (или `Y` на авто-вопросах sync);
-- подтверждает перезалив при `--sync`;
-- подтверждает `[y/N]` при превышении лимитов в `/send`.
-
 ---
 
 ### Требования
 
-- **Python 3.10+** (аннотации `X | None`, `tuple[list[str], str]`).
+- **Python 3.10+**.
 - **Google GenAI SDK** `google-genai>=1.0.0`.
-- **pathspec** — опционально, для парсинга `.gitignore`.
-- **prompt-toolkit** — рекомендовано, для многострочного ввода и истории.
-- ОС: Linux, macOS, Windows.
-
----
-
-### Roadmap
-
-`v0.0.2` — текущая. Что осознанно **не** вошло:
-
-- **Скачивание из Files API в `/save`.** Если модель вернула ссылку
-  (`file_data`) вместо `inline_data` — упоминается как текст.
-- **Батчинг загрузки** больших файлов в одном `/send`.
-- **Стриминг ответа** (`stream=True`).
-- **Кросс-сессионный поиск в `@`** — сейчас только текущая сессия.
-- **Очистка `media/`** — файлы копятся, лимита нет.
-- **`/apply` в `project_extracted/`** — сейчас копирует в `--project`, а не
-  внутрь распакованного zip.
-- **Persistent input history** (`FileHistory` in `saved/.history`) — сейчас
-  `InMemoryHistory`, `↑`/`↓` работает только внутри одной сессии.
-- **Cross-terminal Shift+Enter reliability** — зависит от протокола
-  терминала (Kitty / `modifyOtherKeys=2` / `CSI-u`); fallback `Alt+Enter` /
-  `Ctrl+J` универсален.
+- **pathspec** — опционально.
+- **prompt-toolkit** — рекомендовано.
 
 ---
 
@@ -660,7 +420,7 @@ images/audio/video/archives/files directly from the chat, auto-saves any media
 the model generates, lets you export results back to a real project, and
 survives crashes via `resume` + `sync`.
 
-**Version:** `0.0.2`. **Python:** `3.10+`.
+**Version:** `0.0.4`. **Python:** `3.10+`.
 
 ### Why this exists
 
@@ -669,35 +429,25 @@ touch real project files. `replai`:
 
 - **reads your project from disk** — the model sees structure and file contents;
 - **accepts new files from the chat** (`/send`) — images, archives, code;
-- **auto-saves everything the model returns** — media (image/video/audio) lands
-  in `media/` immediately, so expensive generation is not lost;
+- **auto-saves everything the model returns** — media lands in `media/`
+  immediately, so expensive generation is not lost;
 - **lets you export** — `/save` for a session archive, `/apply` for the real
   project, `/md` for a Markdown report;
+- **prepares context** — `/sync` uploads large datasets to AI Studio without burning the model's token limit right now;
 - **survives failures** — session continues after Ctrl+C, kill, SSH disconnect;
 - **remembers sessions** — a summary is generated on exit, and a session menu
   with descriptions appears on the next launch.
 
 ### Design principles
 
-Four principles explain many decisions in `replai` — understanding them saves
-hours of debugging.
-
-1. **State is visible and portable.** Everything lives in `./replai/` next to
-   the script. No hidden folders in `~/.config`. Copy the folder — move
-   sessions. Delete the folder — delete everything.
-
-2. **Two different "storages".** Local files (on disk, `local_path`) and cloud
-   files (Gemini Files API, `files_api_uri`) are **not the same**. Cloud is a
-   flat space `files/<id>` where files live 48 hours, and `display_name` is
-   the only way to tell "our" file from a foreign one. Local file is the
-   source of truth. `replai` syncs them by SHA-256, not by names.
-
-3. **`@name` is always the cloud version.** The most important rule (see
-   below). It removes ambiguity about "which version the user means".
-
+1. **State is visible and portable.** Everything lives in `./replai/`.
+2. **Two different "storages".** Local files (`local_path`) and cloud files
+   (Gemini Files API, `files_api_uri`) are **not the same**. `replai` syncs
+   them by SHA-256, not by names.
+3. **`@name` is always the cloud version.** Removes ambiguity about "which
+   version the user means".
 4. **Nothing is lost.** Model media is auto-saved to disk **before** you click
-   anything. The model does not spam media, but each image is expensive and
-   non-reproducible (seed is not preserved) — loss is unacceptable.
+   anything. Loss is unacceptable.
 
 ---
 
@@ -709,8 +459,6 @@ cd replai
 pip install -r requirements.txt
 ```
 
-`replai.py` is a single file, no build step. Run: `python replai.py --help`.
-
 `requirements.txt`:
 
 ```
@@ -719,208 +467,17 @@ pathspec>=0.12.0
 prompt-toolkit>=3.0.0
 ```
 
-- **`pathspec`** is optional — without it `.gitignore` is not honored,
-  everything else works.
-- **`prompt-toolkit`** is recommended — enables multiline input with
-  `Shift+Enter`, history `↑`/`↓`, and soft line breaks. Without it, `replai`
-  falls back to `\`-continuation or `"""…"""` blocks.
-
----
-
-### Quick start
-
-1. Put the API key in `api-key.txt` next to `replai.py` (single line, key only).
-   Or `--api-key PATH`, or `export GEMINI_API_KEY=...`.
-2. Run: `python replai.py --project ./my_project`
-3. Work — see **REPL commands** below.
-
 ---
 
 ### Text input
 
-`replai` supports **multiline input** — useful for long prompts, code
-snippets, and step-by-step instructions.
-
 | Action | Keys |
 |---|---|
 | Send message | `Enter` |
-| Soft line break (modern terminals) | `Shift+Enter` |
-| Soft line break (universal fallback) | `Alt+Enter` or `Esc` then `Enter` |
-| Soft line break (LF) | `Ctrl+J` |
-| Paste from clipboard | `Ctrl+V` (preserves indentation and line breaks) |
+| Soft line break | `Shift+Enter` / `Alt+Enter` / `Ctrl+J` |
+| Paste from clipboard | `Ctrl+V` |
 | Request history | `↑` / `↓` |
-| Clear buffer | `Ctrl+C` (while typing) |
 | Exit session | `Ctrl+D` or `exit` / `quit` / `/exit` |
-
-On line break, a continuation marker `... ` appears.
-
-**Why `Shift+Enter` and not "just Enter → newline":** plain `Enter` is the
-most frequent action (send message) and cannot be remapped. `Shift+Enter` is
-the familiar soft break in chats and IDEs, but it requires terminal support.
-If the terminal does not emit `Shift+Enter` as a distinct event (old
-`cmd.exe`, simple SSH clients), `Alt+Enter` or `Esc+Enter` work — these are
-understood by any terminal.
-
-**Fallback without `prompt-toolkit`:** multiline input via trailing `\` or
-`"""…"""` blocks:
-
-```
-You: Write a function that \
-... takes a list of numbers and \
-... returns their sum
-```
-
----
-
-### Key concepts
-
-#### Session = pure timestamp
-
-`session_id` is `YYYYMMDD_HHMMSS` (e.g. `20261107_150453`). **No prefix.**
-This is the directory name inside `replai/sessions/`.
-
-**The `replai_` prefix exists only in `display_name`** — a label in Files API.
-In folder name, command arguments, banner — clean timestamp.
-
-`Manifest.new` rejects `session_id` not matching `^\d{8}_\d{6}$`, and
-`make_display_name` tolerates any number of prefixes on input but always
-produces exactly one on output.
-
-#### Local file vs cloud file
-
-- **Local** — on your disk, `local_path`. Source of truth.
-- **Cloud** — in Files API, `files_api_uri`. Lives 48 hours. A **copy** made
-  for sending to the model.
-
-`replai` uses **SHA-256, not names**, to determine if versions match. Renaming
-a local file is a non-issue. Content change is detected automatically
-(`out-of-sync`). If storage has no copy (`new-local`) or the copy is stale
-(`out-of-sync`), `replai` offers to re-upload.
-
-`display_name` in cloud = `replai_<session_id>_<path>`. Serves two purposes:
-(1) distinguish our files from foreign ones in a shared GCP project,
-(2) on search, normalize back to the clean `<path>`.
-
-#### `@name` is always the cloud version (most important rule)
-
-This rule solves the ambiguity: **which version of the file does the user mean
-when writing `@name`?** Answer: the one in storage at the moment of sending.
-
-Example:
-
-- In storage, `test_report.md` contains "Mom goes to work" (old).
-- Locally, `test_report.md` contains "Mom washed the frame" (new).
-
-| What you type | What the model sees |
-|---|---|
-| `/send "test_report.md" what is in file test_report.md` | **only** local ("washed the frame") |
-| `/send "test_report.md" what is in @test_report.md` | **both**: local + cloud ("washed the frame" + "goes to work") |
-| `what is in @test_report.md` (no /send) | **only** cloud ("goes to work") |
-
-**Why:** `@` is an explicit marker of "storage version". Without `@`, the name
-in text is just a word. `/send "path"` is an explicit command "attach the fresh
-local version right now".
-
-If the cloud copy is missing or expired (48h), `replai` offers to re-upload it
-from disk — **one Enter**, fully transparent. The user does not need to think
-about the 48-hour limit.
-
-**What if the cloud file does not exist at all and there is nothing to
-re-upload from** (no local copy either): warning + `[Y/n]` — send anyway (e.g.
-`@Image1` in a WAN prompt is text, not a file). `Enter` = send as is.
-
-#### Media is always auto-saved
-
-The moment the model returns an image/video/audio in its response, it is
-**immediately** written to
-`replai/sessions/<id>/media/<timestamp>_turnNNN_MMM.<ext>`. This is **not**
-`/save` — `/save` is on user request. This is a safety net: generated images
-are non-reproducible (seed is lost).
-
-Every save is accompanied by a `[MEDIA]` line in `log.txt` with the same
-timestamp and turn number as in the filename — you can find "which response
-this file belongs to" with a simple `grep`.
-
-Auto-saved media immediately appears in `/list` (with `src=gen`), available
-for `/focus`, `/save`, `@`.
-
-#### Three "exits" from the session
-
-- **`/save`** — session archive (`saved/<path>`). For history, backups,
-  comparing versions via `[o/k/s]` on name collision.
-- **`/apply`** — export to a real project. Where you said — there it copied.
-  Default — `--project`.
-- **`/md`** — Markdown report from the last response.
-
-Three different targets — three different commands. `/save` does not touch the
-project, `/apply` does not touch the archive, `/md` touches neither.
-
----
-
-### API key
-
-Precedence:
-
-| Order | Source |
-|---|---|
-| 1 | `--api-key PATH` |
-| 2 | `api-key.txt` next to the script |
-| 3 | `GEMINI_API_KEY` (env) |
-| 4 | `GOOGLE_API_KEY` (env, legacy) |
-
-The key is **never accepted inline** (`--api-key sk-abc` → error "file not
-found"). File permissions are checked: if accessible by group/others
-(`mode & 0o077`) — warning `chmod 600`.
-
-**Why:** a key in `ps aux` and `~/.bash_history` is leaked forever. Only a
-file with restricted permissions or an env variable is safe.
-
----
-
-### UI language
-
-`ru` (default) and `en`. Switch via `--lang` or `REPLAI_LANG=en replai`.
-Localized: help, menu, banner, commands, prompts, errors, summary.
-
----
-
-### Session menu on startup
-
-When launched **without** `--resume`, `--new`, `--sync` in a TTY, `replai`
-shows a **menu of all sessions** with date, turn/file counts, project, and
-summary.
-
-`0` or `Enter` — new session. Number or full `session_id` — load specific.
-
-**`--project PATH`** filters the menu: only sessions for that project
-(`os.path.normcase(abspath())`).
-
-**`--resume` without ID** — same menu, but no "new session" option (Enter —
-cancel).
-
-Menu is **not shown** when: `--new` (new immediately), `--sync` (batch),
-`--resume <id>` (direct load), `--continue` (last), not a TTY (pipe, CI).
-
----
-
-### Session summary on exit
-
-On exit (`exit`, `quit`, `/exit`, `Ctrl+D`), `replai` **generates one short
-sentence** (up to 100 chars) — the essence of the session work — and stores
-in `manifest.json` (`summary`, `summary_at`).
-
-**Why:** the user returns a day later and wants to know "what was that
-session" — without reading the log. Summary is visible in the menu, `/session`,
-banner.
-
-**What does NOT happen:** not written to `history` (metadata), does not save
-media, not regenerated if the manifest hasn't changed, does not block exit on
-error.
-
-**Disable:** `--no-summary`.
-
-**Not generated** if: session empty, Ctrl+C (interruption — not exit), last
-turn is a user turn without a model turn (after rollback).
 
 ---
 
@@ -932,24 +489,26 @@ turn is a user turn without a model turn (after rollback).
 |---|---|---|
 | `--api-key PATH` | — | API key file |
 | `--model NAME` | `gemini-3.8-flash` | Gemini model |
-| `--temperature F` | `0.2` | Temperature |
 | `--project PATH` | — | File / **directory** / `.zip` |
-| `--state-dir PATH` | `replai` | State root |
 | `--resume [ID]` | — | Resume (no ID — menu) |
 | `--session [ID]` | — | Alias of `--resume` |
 | `--continue` | off | Last session without menu |
 | `--new` | off | New immediately, no menu |
-| `--no-summary` | off | No summary on exit |
-| `--lang {ru,en}` | `ru` | UI language |
-| `--help` / `--version` | — | Help / version |
 
-#### Sync
+#### Sync (CLI)
 
 | Option | Default | Description |
 |---|---|---|
-| `--sync` | off | One-shot manifest pass + exit |
+| `--sync` | off | Sync project files with storage |
 | `--dry-run` | off | Show actions without executing |
 | `--sync-check {auto,warn,off}` | `auto` | File-use policy |
+| `--project-include-ignored` | off | Sync `.gitignore` excluded files without prompting |
+| `--sync-clean-detached` | off | Allow deletion of detached files to free quota |
+
+**Behavior of `--sync`:**
+- In a TTY (interactive terminal), `--sync` **does not exit**: it syncs and **starts the chat**.
+- In CI mode (no TTY), it syncs and **exits** (code 0).
+- Running `replai --sync` without other flags automatically picks the last session (equivalent to `--continue --sync`).
 
 **File states** (`source != generated`):
 
@@ -961,51 +520,17 @@ turn is a user turn without a model turn (after rollback).
 | no | yes | — | `detached` | use URI |
 | no | no | — | `lost` | error |
 
-`detached` **never** offers "update" — nothing to update, no local version.
-This is the unmounted-folder or deleted-file scenario: the storage copy is used.
-
-Media with `source=generated` is always `ok` and **skipped** in `--sync` — it
-is already on disk.
-
-#### Retries
+#### Project scanning
 
 | Option | Default |
 |---|---|
-| `--send-retries N` | `4` |
-| `--send-retry-delay F` | `2.0` sec |
+| `--project-max-file-bytes` | `6_000_000` (6 MB) |
+| `--project-max-total-bytes` | `500_000_000` (500 MB) |
+| `--project-max-files` | `200` |
+| `--project-follow-symlinks` | off |
+| `--project-include-ide-dirs` | off |
 
-Backoff `2 → 4 → 8 → 16` sec. Triggers by substring: `503`, `UNAVAILABLE`,
-`429`, `RESOURCE_EXHAUSTED`, `Deadline Exceeded`, `timeout`, `high demand`,
-`overloaded`. Anything else is raised immediately.
-
-#### `/send` limits
-
-`--limit-image-mb` (20), `--limit-video-mb` (500), `--limit-text-kb` (200),
-`--limit-archive-mb` (200), `--limit-inline-total-mb` (18),
-`--limit-request-total-mb` (500).
-
-On exceed — `[y/N]`. Flag `-y`/`--yes` skips confirmations (for CI).
-
-**Delivery rule for binary files:**
-- `size <= --limit-inline-total-mb` → bytes in request (`Part.from_bytes`);
-- otherwise → `client.files.upload` + `Part.from_uri`.
-
-Threshold 18 MB (not 20) — a margin for the rest of the request text, so as
-not to hit Gemini's hard limit (20 MB per request).
-
-#### Project scanning
-
-`--project-max-file-bytes` (200 KB), `--project-max-total-bytes` (2 MB),
-`--project-max-files` (200), `--project-follow-symlinks` (off),
-`--project-include-ide-dirs` (off).
-
-`.gitignore` is honored (if `pathspec` is installed). Hard-excluded: `.git/`,
-`__pycache__/`, `.venv/`, `node_modules/`, `dist/`, `*.pyc`, `*.so`, `*.log`,
-etc. Symlinks are **not** dereferenced by default; with
-`--project-follow-symlinks` — with cycle protection.
-
-**`--project` = directory** — used directly (not copied into session).
-**`--project` = `.zip`** — extracted to `<session_dir>/project_extracted/`.
+> **Note:** Default limits (6 MB per file, 500 MB per project) are tuned for comfortable work with image datasets. If you work with text only, you can lower them.
 
 ---
 
@@ -1017,158 +542,44 @@ etc. Symlinks are **not** dereferenced by default; with
 | `/focus <pattern> [text]` | Focus on a file with instruction |
 | `@<path>` in text | Mention the storage version of the file |
 | `/send <path...> [--text X]` | Add new file(s) to session and send |
+| `/sync [path]` | Synchronize project with storage (without sending to model) |
 | `/save [path]` | Save code/media from last response to `saved/` archive |
 | `/md <file>` | Save the entire response as Markdown |
 | `/apply <src> [dst]` | Export files from `saved/` into actual project |
-| `/forget <pattern>` | Remove entry from session (file on disk kept) |
+| `/forget <pattern>` | Remove entry (detached files also deleted from cloud) |
 | `/session` | Session info |
-| `/history` | Turn history (last 15, with turn ID) |
+| `/history` | Turn history (last 15) |
 | `/help` | Cheatsheet |
 | `exit` / `quit` / `/exit` | Exit (generates summary) |
 
-All commands start with `/`. For multiline input — see "Text input".
+#### `/sync [path]` — dataset preparation
 
-#### `/list` — session file list
+Solves the problem: "How to upload 78 images to AI Studio without sending them to the model right now (to avoid burning context)?".
 
-Table: `#` (index for `#N`), type, src (`in`/`gen`), status (sync status for
-input, `ok` for generated), size, normalized name.
+**How it works:**
+1. Scans the `--project` folder (or `[path]`).
+2. If it finds files excluded in `.gitignore` (e.g., `dataset/`), it **asks for permission** to sync them (`.gitignore` is for GitHub, not for AI Studio).
+3. Uploads to Files API and registers in `manifest.json`.
+4. **Does not send anything to the model.** You can now target files via `@` or `/focus`.
 
-`src=in` — from project or `/send`. `src=gen` — model-generated.
+**Three-tier upload confirmation:**
+If there are many new/changed files, it won't make you press `y` for each:
+1. **All:** "Found 78 files. Upload all? [Y/n]".
+2. **Folder:** If you answer `n`, it groups by folders: "Upload all 70 files in 'dataset'?".
+3. **File:** Only if you declined the folder, it iterates one by one.
 
-#### `/focus <pattern> [text]` — targeted file send
+**Cleanup (detached files):**
+If you deleted a file locally but it's still in the session, `/sync` will warn you and offer to delete it from AI Studio to free quota.
 
-Send one file with an instruction. `pattern` — `#N` (index from `/list`),
-exact name, basename, glob, or `replai_<sid>_<path>` (normalized).
+#### `/forget <pattern>`
 
-Before sending, status is checked:
+Smart deletion:
+- If file **exists on disk**: removes only the record from `manifest.json`.
+- If file is **missing on disk** (`detached`): removes the record **and** calls `client.files.delete()` to free AI Studio quota.
 
-- `ok` → send;
-- `out-of-sync` + `--sync-check auto` → ask "update in storage?";
-- `warn` → warn only;
-- `off` → silently send local;
-- `detached` → use URI from storage;
-- `lost` → error.
+#### `@name` in text
 
-**Why separate from `/send`:** `/focus` does not add a new file — it **returns
-attention** to an already known file. Useful for iterative debugging of one
-file from a large dataset.
-
-#### `@name` in text — cloud version mention
-
-Recognized at start of line or after space/`(`/`[`/quote. `user@example.com`
-is not broken. Trailing punctuation (`@main.py,`) is stripped.
-
-**What it does:** looks up the file in the manifest, checks `files_api_uri`
-and `expires_at`, offers to re-upload if needed. Inserts
-`[MENTION] <path> (storage version)` + content from Files API.
-
-**Difference from `/send`:** `/send path` attaches the **fresh local** file.
-`@name` in text — the **cloud copy**. These are **different files** if content
-differs. See "Key concepts".
-
-#### `/send <path...> [--text X]` — add file to session
-
-Syntax:
-
-```
-/send "file.png" Hello
-/send "a.png" "b.png" --text Compare
-/send "my file with spaces.png" test
-```
-
-Parsing: if `--text` present — everything before is paths, everything after is
-text. Otherwise: quoted token → path; unquoted existing file → path; otherwise
-→ start of text.
-
-By type: text inline; archive extracted in memory; image/video/audio/binary —
-inline or Files API by size.
-
-**If text contains `@name`** (e.g. `/send "test_report.md" what is in
-@test_report.md`) — both versions go to the model with explicit labels:
-`[FILE]` (local, fresh) + `[MENTION]` (cloud, old). The model sees them as
-**different files** and doesn't confuse them.
-
-If `@name` not found in session/storage — warning + `[Y/n]`. Enter = send
-without mention (for prompts like `@Image1` where `@` is text).
-
-#### `/save [path]` — archive the last response
-
-**Without argument:** all code blocks + all media from the last response. Plan
-shown, `[y/N]`.
-
-**With argument:** first looks in the session (by name, index, glob), then in
-response blocks. Found → `shutil.copy2` to `saved/<path>`.
-
-**On name collision:** `[o]` overwrite / `[k]` new with turn ID
-(`main_t003.py`, old intact) / `[s]` skip. Identical content skipped silently
-(`⏭ Unchanged`).
-
-**Target:** `replai/sessions/<id>/saved/`. **Not** the project, **not** storage.
-
-**Why:** archive in the session. For history, for version comparison. If you
-need it in the **project** — use `/apply`.
-
-#### `/apply <src> [dst]` — export to project
-
-**Direction:** `<session>/saved/` → `<dst>/`. This is the **exit from session
-to reality**.
-
-**`src`** — pattern in session: name, `<dir>/` (all files in folder), `#N`,
-glob.
-
-**`dst`** — where to copy. If not specified — to `--project`:
-- `--project` = directory → into it;
-- `--project` = `.zip` → into `<session>/project_extracted/`.
-
-**Behavior:** shows plan (`new` / `CONFLICT`), asks `[y/N]`. On conflict —
-`[y/N]` per file (bypassed by `--force`/`--yes`).
-
-**`--dry-run`** — plan only.
-
-**Why separate from `/save`:** `/save` = "I want an archive", `/apply` = "I
-want it in my working project". Different targets — different commands.
-
-#### `/forget <pattern>` — remove from session
-
-Removes the record from `manifest.files()`. **Does not** delete from disk
-(`local_path`), **does not** delete from Files API. Just removes from context:
-after `/forget`, the file is not found in `/list`, `@`, `/focus`, `/save`.
-
-For `source=generated` — separate confirmation (file in `media/` remains).
-
-**Why:** clean the session from extra records without touching real files.
-Useful in long sessions and when the Files API 20 GB quota is exhausted
-(remove record → re-upload from local).
-
-`--dry-run` — show only.
-
-#### `/md <file>` — Markdown export
-
-Saves `LAST_RESPONSE["text"]` to a file.
-
-- Without explicit path (`/md report.md`) → `saved/report.md`.
-- With explicit path (`/md ./out.md`, `/md ~/docs/x.md`, `/md C:\x.md`) →
-  path as is, `~` expanded, nested folders created.
-
-Output shows **absolute** path and size — the user sees where the file
-actually went.
-
-#### `/session` — session info
-
-ID, summary, date, model, project, file/turn/media counts,
-manifest/log/saved/media paths, ready-to-copy `replai --resume <id>`.
-
-#### `/history` — last 15 turns
-
-With `[turn:N]` — the turn number, matching `turnNNN` in media filenames and
-`file_tNNN` on `/save` with `[k]`. Allows correlating an artifact with a turn.
-
-#### `/help` — cheatsheet
-
-#### `exit` / `quit` / `/exit` — exit
-
-Three equivalent ways. Generates summary. Ctrl+D — same with summary. Ctrl+C —
-interrupts the operation, does not exit.
+Inserts `[MENTION] <path> (storage version)` + content from Files API. If the copy is expired, it offers to re-upload.
 
 ---
 
@@ -1185,103 +596,12 @@ replai/
         └── project_extracted/        ← only for --project *.zip
 ```
 
-All visible, all portable.
-
----
-
-### Resilience
-
-- **Retries on 503/429** — exponential backoff.
-- **Atomic manifest write** via `.tmp` → `os.replace`.
-- **Incremental write** after every action.
-- **Turn rollback on Ctrl+C** — orphan user record removed from `history`, so
-  summary and resume work on a consistent history.
-- **Auto-cleanup of stale `files_api_uri`** when local SHA changes
-  (`add_file`) — old URI won't be "phantomly" used.
-- **Warning on text fallback to URI** — if local file is unavailable,
-  `replai` explicitly says it is using the storage version.
-
----
-
-### Examples
-
-#### Debugging one file from a large dataset
-
-```
-/list
-/focus "Five of Wands.jpg" Script produces red background instead of white
-```
-
-#### Comparing two files in one question
-
-```
-Why does @prepress/lift.py's lift() function give red background for
-@Five\ of\ Wands.jpg, but white for @Six\ of\ Wands.jpg?
-```
-
-#### Generating and saving an image
-
-```
-Generate a dragon postcard in industrial style, 512x512
-# [1 media file auto-saved to media/]
-
-/save
-# Saves the image to saved/
-```
-
-#### Sync after edits
-
-```bash
-replai --project ./proj --sync --yes
-```
-
-#### Recovery after a crash
-
-```bash
-replai --resume                       # session menu
-replai --resume 20261107_142305       # specific
-replai --session 20261107_142305      # alias
-replai --continue                     # latest
-```
-
-#### CI mode (no interactivity)
-
-```bash
-replai --yes --project ./proj --sync
-```
-
-`--yes` automatically:
-- selects "new session" in menu (or `Y` on sync prompts);
-- confirms re-upload in `--sync`;
-- confirms `[y/N]` prompts on `/send` limits.
-
 ---
 
 ### Requirements
 
-- **Python 3.10+** (annotations `X | None`, `tuple[list[str], str]`).
+- **Python 3.10+**.
 - **Google GenAI SDK** `google-genai>=1.0.0`.
-- **pathspec** — optional, for `.gitignore` parsing.
-- **prompt-toolkit** — recommended, for multiline input and history.
-- OS: Linux, macOS, Windows.
-
----
-
-### Roadmap
-
-`v0.0.2` — current. Deliberately **not** included:
-
-- **Download from Files API in `/save`.** If model returned a link
-  (`file_data`) instead of `inline_data` — mentioned as text.
-- **Upload batching** for large files in one `/send`.
-- **Response streaming** (`stream=True`).
-- **Cross-session `@` search** — currently current session only.
-- **`media/` cleanup** — files accumulate, no limit.
-- **`/apply` into `project_extracted/`** — currently copies to `--project`,
-  not into the extracted zip.
-- **Persistent input history** (`FileHistory` in `saved/.history`) — currently
-  `InMemoryHistory`, `↑`/`↓` works within one session only.
-- **Cross-terminal Shift+Enter reliability** — depends on terminal protocol
-  (Kitty / `modifyOtherKeys=2` / `CSI-u`); `Alt+Enter` / `Ctrl+J` fallback is
-  universal.
+- **pathspec** — optional.
+- **prompt-toolkit** — recommended.
 ```
