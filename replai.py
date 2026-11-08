@@ -1,4 +1,4 @@
-# replai v0.0.4
+# replai v0.0.5
 # Terminal REPL for Gemini — project-aware code chat with file round-trip.
 # State dir: ./replai/ (visible, portable). No hidden dirs.
 # License: MIT
@@ -49,7 +49,7 @@ except ImportError:
 from google import genai
 from google.genai import types
 
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 
 # ─── Localization (i18n) ──────────────────────────────────────────────────
 CURRENT_LANG = os.environ.get("REPLAI_LANG", "ru").lower().strip()
@@ -94,6 +94,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "key_hint_file": "  → Или положите файл: {path}",
         "key_hint_env": "  → Или установите переменную окружения GEMINI_API_KEY",
         "key_file_missing": "Ошибка: файл ключа не найден: {path}",
+        "key_file_empty": "⚠ Ошибка: файл с API-ключом найден, но он пуст: {path}",
+        "key_file_empty_hint": "  → Вам нужно вставить ваш ключ Google API внутрь этого файла.",
+        "key_instructions": (
+            "🔑 Как получить API-ключ Google:\n"
+            "  1. Перейдите в Google AI Studio: https://aistudio.google.com/app/apikey\n"
+            "  2. Нажмите «Create API key» и скопируйте ключ.\n"
+            "  3. Вставьте его в файл: {path}\n"
+            "  4. Сохраните файл и запустите replai снова."
+        ),
         "client_init_err": "Ошибка инициализации Gemini Client: {err}",
         "session_not_found": "Сессия не найдена: {id}",
         "session_load_err": "Сессия не загружена: {id}",
@@ -110,8 +119,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "sync_summary": "\nИтог синхронизации:",
         "sync_reuploaded": "✓ Перезалит: {name}",
         "sync_uploaded": "✓ Загружен: {name}",
-        "sync_ask_upload_all": "⚠ Найдено {count} файлов для загрузки. Загрузить все? [Y/n]: ",
-        "sync_ask_upload_dir": "⚠ Загрузить все {count} файлов в папке '{dir}'? [Y/n]: ",
+        "sync_lvl1_prompt": "Загрузить все найденные файлы ({count})? [Y/n] (Y — да для всех, n — перейти к пошаговому выбору): ",
+        "sync_lvl2_dir_prompt": "Папка '{dir}' ({count} файлов). Загрузить все файлы каталога? [y/N/a] (y — да для всех, N — пропустить папку, a — спрашивать по каждому): ",
+        "sync_lvl3_file_prompt": "Загрузить файл '{name}'? [y/N]: ",
         "sync_ask_reupload": "⚠ {name} изменился. Перезалить? [y/N]: ",
         "sync_ask_upload": "Загрузить новый файл {name}? [y/N]: ",
         "sync_detached": "⚠ {name}: локальный файл не найден; используется копия из хранилища",
@@ -190,14 +200,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "save_opt_choice": "Выбор [o/k/s]: ",
         "save_opt_invalid": "Введите o (overwrite), k (keep both) или s (skip).",
         "save_unchanged": "⏭ Без изменений: {path}",
-        "save_success": "✓ Сохранено: {path}",
+        "save_success": "✓ Сохранён блок кода: {path}",
         "save_copied": "✓ Скопировано: {path}",
         "save_api_download_unsupported": "⚠ Скачивание из Gemini Files API для {name} пока не поддерживается.\n   URI: {uri}",
         "save_fail_content": "Не удалось получить содержимое файла: {name}",
-        "save_not_found": "Не найдено ни в сессии, ни в коде последнего ответа: {arg}",
-        "save_no_blocks_or_media": "В последнем ответе нет ни блоков кода, ни медиафайлов.",
-        "save_found_count": "\nНайдено {count} файлов (turn={turn:03d}):",
-        "save_ask_all": "Записать все файлы? [y/N]: ",
+        "save_not_found": "Не найдено ни в коде ответа модели, ни в сессии: {arg}",
+        "save_no_blocks_or_media": "В последнем ответе модели нет блоков кода. (Для сохранения всего текста сообщения используйте: /md <файл.md>)",
+        "save_found_count": "\nНайдено {count} блоков кода / медиа (turn={turn:03d}):",
+        "save_ask_all": "Записать все найденные блоки кода на диск? [y/N]: ",
         "focus_usage": "Использование: /focus <pattern> [текст инструкции]",
         "focus_not_found": "Файл не найден в сессии: {pattern}",
         "focus_prep_failed": "Не удалось подготовить содержимое для {name}",
@@ -205,7 +215,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "send_no_files": "Не указаны файлы для отправки.",
         "md_usage": "Использование: /md <filename.md>",
         "md_no_response": "Ответ модели отсутствует.",
-        "md_success": "✓ Записано: {path} ({size})",
+        "md_success": "✓ Текст ответа сохранён: {path} ({size})",
         "apply_usage": "Использование: /apply <src> [dst]  — src: имя/glob/папка; dst по умолчанию = --project",
         "apply_no_project": "Ошибка: dst не указан и нет --project. Укажите /apply <src> <dst>.",
         "apply_not_found": "Не найдено подходящих файлов в сессии: {pattern}",
@@ -237,8 +247,8 @@ STRINGS: dict[str, dict[str, str]] = {
   /focus <pattern> [текст]   — передать файл модели (#1, имя, glob) с инструкцией
   @<path> в тексте           — упоминание файла из хранилища (Files API)
   /send <path...> [--text X] — загрузить новый файл(ы) и отправить в контекст
-  /save [path]               — сохранить код/медиа последнего ответа в архив saved/
-  /md <file>                 — записать весь последний ответ в Markdown
+  /save [path]               — сохранить только блоки КОДА из ответа модели в saved/
+  /md <file>                 — сохранить весь ТЕКСТ ответа модели в Markdown
   /apply <src> [dst]         — выгрузить сохранённые файлы из saved/ в проект
   /forget <pattern>          — удалить запись (detached-файлы удаляются и из облака)
   /sync [path]               — синхронизировать проект или новую папку с хранилищем
@@ -288,6 +298,15 @@ STRINGS: dict[str, dict[str, str]] = {
         "key_hint_file": "  → Or place file: {path}",
         "key_hint_env": "  → Or set GEMINI_API_KEY environment variable",
         "key_file_missing": "Error: API key file not found: {path}",
+        "key_file_empty": "⚠ Error: API key file found, but it is empty: {path}",
+        "key_file_empty_hint": "  → You need to paste your Google API key into this file.",
+        "key_instructions": (
+            "🔑 How to get a Google API key:\n"
+            "  1. Go to Google AI Studio: https://aistudio.google.com/app/apikey\n"
+            "  2. Click 'Create API key' and copy the key.\n"
+            "  3. Paste it into the file: {path}\n"
+            "  4. Save the file and run replai again."
+        ),
         "client_init_err": "Failed to initialize Gemini Client: {err}",
         "session_not_found": "Session not found: {id}",
         "session_load_err": "Failed to load session: {id}",
@@ -304,8 +323,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "sync_summary": "\nSync Summary:",
         "sync_reuploaded": "✓ Re-uploaded: {name}",
         "sync_uploaded": "✓ Uploaded: {name}",
-        "sync_ask_upload_all": "⚠ Found {count} files to upload. Upload all? [Y/n]: ",
-        "sync_ask_upload_dir": "⚠ Upload all {count} files in '{dir}'? [Y/n]: ",
+        "sync_lvl1_prompt": "Upload all {count} files to cloud? [Y/n] (Y — all, n — choose directories/files): ",
+        "sync_lvl2_dir_prompt": "Folder '{dir}' ({count} files). Upload all files in this directory? [y/N/a] (y — yes for all, N — skip folder, a — ask each): ",
+        "sync_lvl3_file_prompt": "Upload file '{name}'? [y/N]: ",
         "sync_ask_reupload": "⚠ {name} has changed. Re-upload? [y/N]: ",
         "sync_ask_upload": "Upload new file {name}? [y/N]: ",
         "sync_detached": "⚠ {name}: local file missing; using storage copy",
@@ -384,14 +404,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "save_opt_choice": "Choice [o/k/s]: ",
         "save_opt_invalid": "Please enter o (overwrite), k (keep both), or s (skip).",
         "save_unchanged": "⏭ Unchanged: {path}",
-        "save_success": "✓ Saved: {path}",
+        "save_success": "✓ Code block saved: {path}",
         "save_copied": "✓ Copied: {path}",
         "save_api_download_unsupported": "⚠ Downloading from Gemini Files API for {name} not supported yet.\n   URI: {uri}",
         "save_fail_content": "Failed to retrieve content for file: {name}",
-        "save_not_found": "Found neither in session nor in the latest response code: {arg}",
-        "save_no_blocks_or_media": "Latest response contains neither code blocks nor media.",
-        "save_found_count": "\nFound {count} files (turn={turn:03d}):",
-        "save_ask_all": "Save all files? [y/N]: ",
+        "save_not_found": "Found neither in model code response nor in session: {arg}",
+        "save_no_blocks_or_media": "No code blocks found in model response. (To save entire message text, use: /md <file.md>)",
+        "save_found_count": "\nFound {count} code blocks / media (turn={turn:03d}):",
+        "save_ask_all": "Save all extracted code blocks to disk? [y/N]: ",
         "focus_usage": "Usage: /focus <pattern> [instruction text]",
         "focus_not_found": "File not found in session: {pattern}",
         "focus_prep_failed": "Failed to prepare content for {name}",
@@ -399,7 +419,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "send_no_files": "No files specified for sending.",
         "md_usage": "Usage: /md <filename.md>",
         "md_no_response": "Model response is missing.",
-        "md_success": "✓ Written: {path} ({size})",
+        "md_success": "✓ Response text saved: {path} ({size})",
         "apply_usage": "Usage: /apply <src> [dst]  — src: name/glob/dir; dst defaults to --project",
         "apply_no_project": "Error: dst not specified and no --project. Use /apply <src> <dst>.",
         "apply_not_found": "No matching session files found: {pattern}",
@@ -431,8 +451,8 @@ replai commands:
   /focus <pattern> [text]    — focus model on file (#1, name, glob) with instruction
   @<path> in text            — mention file from storage (Files API)
   /send <path...> [--text X] — upload new file(s) and send to context
-  /save [path]               — save code/media from last response to saved/ archive
-  /md <file>                 — export last response to Markdown
+  /save [path]               — save only CODE blocks from response into saved/
+  /md <file>                 — export full response TEXT to Markdown
   /apply <src> [dst]         — export files from saved/ into actual project
   /forget <pattern>          — remove entry (detached files also deleted from cloud)
   /sync [path]               — synchronize project or new folder with storage
@@ -761,16 +781,30 @@ def _read_key_file(path: str) -> str | None:
 
 
 def load_api_key(cli_path: str | None) -> str | None:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    default_path = os.path.join(script_dir, "api-key.txt")
+
     if cli_path:
         if not os.path.isfile(cli_path):
             print(tr("key_file_missing", path=cli_path), file=sys.stderr)
+            print(tr("key_instructions", path=cli_path), file=sys.stderr)
             return None
-        return _read_key_file(cli_path)
+        key = _read_key_file(cli_path)
+        if not key:
+            print(tr("key_file_empty", path=cli_path), file=sys.stderr)
+            print(tr("key_file_empty_hint"), file=sys.stderr)
+            print(tr("key_instructions", path=cli_path), file=sys.stderr)
+            return None
+        return key
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    default_path = os.path.join(script_dir, "api-key.txt")
     if os.path.isfile(default_path):
-        return _read_key_file(default_path)
+        key = _read_key_file(default_path)
+        if not key:
+            print(tr("key_file_empty", path=default_path), file=sys.stderr)
+            print(tr("key_file_empty_hint"), file=sys.stderr)
+            print(tr("key_instructions", path=default_path), file=sys.stderr)
+            return None
+        return key
 
     for var in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
         val = os.environ.get(var)
@@ -781,6 +815,7 @@ def load_api_key(cli_path: str | None) -> str | None:
     print(tr("key_hint_path"), file=sys.stderr)
     print(tr("key_hint_file", path=default_path), file=sys.stderr)
     print(tr("key_hint_env"), file=sys.stderr)
+    print(tr("key_instructions", path=default_path), file=sys.stderr)
     return None
 
 
@@ -1000,6 +1035,7 @@ class Manifest:
         if not files or not query:
             return []
 
+        # Поддержка поиска по индексу #1, #2 и т.д.
         raw_idx = query.lstrip("#")
         if raw_idx.isdigit():
             idx = int(raw_idx) - 1
@@ -1011,13 +1047,20 @@ class Manifest:
 
         matched = []
         for f in files:
-            fn = normalize_display_name(f.get("display_name", ""))
+            disp_name = f.get("display_name", "")
+            fn = normalize_display_name(disp_name)
             name_base = f.get("name", "")
-            if fn == query_norm or fn == query_clean or name_base == query_clean:
+            
+            # 1. Точное совпадение (введено полное имя из /list, короткое имя или базовое)
+            if query_clean == disp_name or query_norm == fn or query_clean == fn or query_clean == name_base:
                 matched.append(f)
-            elif fnmatch.fnmatch(fn, query_clean) or fnmatch.fnmatch(name_base, query_clean):
+                
+            # 2. Поиск по маске (glob) - проверяем и полное имя, и нормализованное
+            elif fnmatch.fnmatch(disp_name, query_clean) or fnmatch.fnmatch(fn, query_clean) or fnmatch.fnmatch(name_base, query_clean):
                 matched.append(f)
-            elif fn.startswith(query_clean.rstrip("/") + "/"):
+                
+            # 3. Поиск по папке (введено имя папки, возможно с префиксом из /list)
+            elif fn.startswith(query_norm.rstrip("/") + "/"):
                 matched.append(f)
 
         return matched
@@ -1137,8 +1180,7 @@ def sync_session(
     extra_path: str | None = None,
 ) -> dict[str, int]:
     """
-    Ядро синхронизации (ТЗ Разделы 2, 4, 6).
-    Синхронизирует проект или указанный extra_path.
+    Ядро синхронизации с трёхуровневым подтверждением (ТЗ v0.0.3/v0.0.4).
     """
     print(tr("sync_banner"))
     session_id = manifest.data.get("session_id", make_session_id())
@@ -1172,7 +1214,7 @@ def sync_session(
             include_ignored=include_ignored_flag,
         )
 
-        # Обработка .gitignore (ТЗ Раздел 4, п. 2)
+        # Обработка .gitignore
         if ignored_files and not include_ignored_flag:
             if sys.stdin.isatty() and not getattr(args, "yes", False):
                 ans = input(tr("sync_gitignore_ask", path=os.path.basename(p_root), count=len(ignored_files))).strip().lower()
@@ -1212,7 +1254,7 @@ def sync_session(
         elif state in ("new-local", "out-of-sync"):
             pending_uploads.append(entry)
 
-    # 3. Загрузка с трехуровневым подтверждением (Все -> Папка -> Файл)
+    # 3. Трёхуровневый режим подтверждения загрузки
     if pending_uploads and not dry_run:
         def do_upload(entry):
             state_before = resolve_file_state(entry)
@@ -1229,41 +1271,54 @@ def sync_session(
                 else:
                     print(tr("sync_uploaded", name=name))
 
+        # Уровень 1: Загрузить абсолютно все файлы?
         upload_all = False
-        if not getattr(args, "yes", False) and sys.stdin.isatty():
-            upload_all = ask_yes_no(tr("sync_ask_upload_all", count=len(pending_uploads)), default=True)
-        else:
+        if getattr(args, "yes", False):
             upload_all = True
+        elif sys.stdin.isatty():
+            upload_all = ask_yes_no(tr("sync_lvl1_prompt", count=len(pending_uploads)), default=True)
 
         if upload_all:
             for entry in pending_uploads:
                 do_upload(entry)
         else:
+            # Уровень 2 и 3: Группировка по папкам и поштучное подтверждение
             grouped = defaultdict(list)
             for entry in pending_uploads:
-                d = os.path.dirname(entry["rel_path"])
+                rel = normalize_display_name(entry.get("display_name", entry.get("name", "")))
+                d = os.path.dirname(rel)
                 grouped[d].append(entry)
 
             for d, files in grouped.items():
                 d_name = d if d else ("(root)" if CURRENT_LANG == "en" else "(корень)")
-                dir_upload = False
-                if len(files) > 1:
-                    dir_upload = ask_yes_no(tr("sync_ask_upload_dir", count=len(files), dir=d_name), default=True)
+                dir_choice = "a"  # default: спрашивать по каждому
 
-                for entry in files:
-                    if dir_upload:
+                if sys.stdin.isatty() and not getattr(args, "yes", False):
+                    ans = input(tr("sync_lvl2_dir_prompt", count=len(files), dir=d_name)).strip().lower()
+                    if ans in ("y", "yes", "д", "да"):
+                        dir_choice = "y"
+                    elif ans in ("n", "no", "н", "нет", ""):
+                        dir_choice = "n"
+                    elif ans in ("a", "ask", "all", "п", "поштучно"):
+                        dir_choice = "a"
+
+                if dir_choice == "n":
+                    continue
+                elif dir_choice == "y":
+                    for entry in files:
                         do_upload(entry)
-                    else:
-                        state_before = resolve_file_state(entry)
-                        prompt_key = "sync_ask_reupload" if state_before == "out-of-sync" else "sync_ask_upload"
-                        if ask_yes_no(tr(prompt_key, name=normalize_display_name(entry["display_name"])), default=False):
+                else:
+                    # Уровень 3: Поштучный запрос по каждому файлу
+                    for entry in files:
+                        f_name = normalize_display_name(entry.get("display_name", entry.get("name", "")))
+                        if getattr(args, "yes", False) or ask_yes_no(tr("sync_lvl3_file_prompt", name=f_name), default=False):
                             do_upload(entry)
 
     elif dry_run and pending_uploads:
         for entry in pending_uploads:
             print(f"[dry-run] {resolve_file_state(entry)}: {entry.get('local_path')}")
 
-    # 4. Обработка detached файлов (ТЗ Раздел 4, п. 4 и Раздел 6)
+    # 4. Обработка detached файлов
     if detached_entries and not dry_run:
         clean_detached_allowed = False
         if not sys.stdin.isatty():
@@ -1333,6 +1388,11 @@ def build_system_instruction(project_files, project_root):
         parts.append(f"\n## {tr('proj_contents_header')}\n")
         for f in project_files:
             if f.get("kind") == "text":
+                # Защита от контекстного переполнения (файлы больше 1 МБ не инлайнятся)
+                if f.get("size", 0) > 1_000_000:
+                    parts.append(f"\n### `{f['rel_path']}`\n\n[Файл пропущен в системном промпте из-за размера ({human_size(f.get('size', 0))}). Доступен по запросу через /focus или @.]")
+                    continue
+                
                 p = f.get("abs_path") or f.get("local_path")
                 try:
                     with open(p, "r", encoding="utf-8", errors="replace") as fh:
@@ -1344,14 +1404,25 @@ def build_system_instruction(project_files, project_root):
 
 
 def extract_code_blocks(text):
+    """
+    Строго извлекает только валидные блоки кода из тройных обратных кавычек.
+    Исключает чистую прозу, списки и markdown-разметку.
+    """
     blocks = []
-    pattern = re.compile(r"```([\w+-]*)[^\n]*\r?\n(.*?)(?:\r?\n```|\Z)", re.DOTALL)
+    pattern = re.compile(r"```([\w+-]*)[^\n]*\r?\n(.*?)\r?\n```", re.DOTALL)
     fname_re = re.compile(
         r"^\s*(?:#|//|<!--|/\*|--)\s*(?:[Ff]ile:\s*)?([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z0-9_]+)"
     )
+    non_code_langs = {"markdown", "md", "text", "txt"}
+
     for i, m in enumerate(pattern.finditer(text)):
-        lang = (m.group(1) or "").lower()
-        code = m.group(2)
+        lang = (m.group(1) or "").strip().lower()
+        code = m.group(2).strip("\r\n")
+
+        # Если блок пуст — пропускаем
+        if not code.strip():
+            continue
+
         filename = None
         for line in code.split("\n")[:4]:
             cm = fname_re.match(line)
@@ -1363,8 +1434,17 @@ def extract_code_blocks(text):
             pm = re.search(r"[`'\"]?([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z0-9_]+)[`'\"]?\s*:?\s*$", prose.strip())
             if pm:
                 filename = pm.group(1).replace("\\", "/")
+
+        # Фильтрация: отсекаем обычный разговорный markdown/текст, если нет признаков кода
+        if lang in non_code_langs and not filename:
+            # Проверяем, есть ли явные признаки программного кода
+            has_code_markers = any(kw in code for kw in ("def ", "import ", "class ", "function ", "const ", "var ", "{", "}", "SELECT ", "CREATE "))
+            if not has_code_markers:
+                continue
+
         if not filename:
             filename = f"block_{i+1}{lang_to_ext(lang)}"
+
         blocks.append({"lang": lang, "code": code, "filename": filename, "order": i})
     return blocks
 
@@ -1524,9 +1604,10 @@ def parse_args(argv=None):
     p.add_argument("--send-retries", type=int, default=4, help=tr("retries_help"))
     p.add_argument("--send-retry-delay", type=float, default=2.0, help=tr("retry_delay_help"))
 
-    p.add_argument("--project-max-file-bytes", type=int, default=6_000_000)
-    p.add_argument("--project-max-total-bytes", type=int, default=500_000_000)
-    p.add_argument("--project-max-files", type=int, default=200)
+    # Новые лимиты по спецификации Google Files API
+    p.add_argument("--project-max-file-bytes", type=int, default=2_000_000_000)      # 2 ГБ
+    p.add_argument("--project-max-total-bytes", type=int, default=20_000_000_000)   # 20 ГБ
+    p.add_argument("--project-max-files", type=int, default=1000)                    # 1000 файлов
     p.add_argument("--project-follow-symlinks", action="store_true")
     p.add_argument("--project-include-ide-dirs", action="store_true")
     return p.parse_args(argv)
@@ -1548,7 +1629,7 @@ def cmd_list(manifest: Manifest):
     print(f"{'#':>4}  {type_col:<7}  {'src':<5}  {status_col:<12}  {size_col:>9}  {name_col}")
     print("-" * 82)
     for i, f in enumerate(files, 1):
-        name = normalize_display_name(f.get("display_name", "?"))
+        name = f.get("display_name", "?")  # Показываем точное имя из AI Studio
         kind = f.get("kind", "?")
         src = "gen" if f.get("source") == "generated" else "in"
         status = "ok" if src == "gen" else resolve_file_state(f)
@@ -1633,13 +1714,15 @@ def _resolve_save_target(target, turn, args):
 
 
 def _save_block(block, save_root, turn, args):
+    """Сохраняет извлеченный блок кода в файл."""
     target = os.path.join(save_root, block["filename"])
     ensure_dir(os.path.dirname(target) or ".")
     if os.path.isfile(target):
         try:
             with open(target, "r", encoding="utf-8", errors="replace") as f:
                 if f.read().replace("\r\n", "\n") == block["code"].replace("\r\n", "\n"):
-                    print(tr("save_unchanged", path=target)); return
+                    print(tr("save_unchanged", path=target))
+                    return
         except OSError:
             pass
     final = _resolve_save_target(target, turn, args)
@@ -1679,23 +1762,38 @@ def _save_session_entry(entry, save_root, turn, args):
 
 
 def cmd_save(manifest, save_root, arg, args):
+    """
+    Сохраняет строго блоки КОДА из последнего ответа модели (ТЗ п. 3).
+    Приоритет: блоки кода из LAST_RESPONSE -> затем файлы сессии.
+    """
     ensure_dir(save_root)
     turn = LAST_RESPONSE.get("turn", 0)
+
+    # 1. Если аргумент передан: ищем блок кода в последнем ответе модели В ПЕРВУЮ ОЧЕРЕДЬ!
     if arg:
+        if LAST_RESPONSE["text"]:
+            for b in extract_code_blocks(LAST_RESPONSE["text"]):
+                if b["filename"] == arg or os.path.basename(b["filename"]) == os.path.basename(arg):
+                    _save_block(b, save_root, turn, args)
+                    return
+        # Только если такого блока кода нет — проверяем файл сессии
         entry = manifest.find_file(arg)
         if entry:
             entry_turn = entry.get("turn", turn) if isinstance(entry.get("turn"), int) else turn
             _save_session_entry(entry, save_root, entry_turn or turn, args)
             return
-        if LAST_RESPONSE["text"]:
-            for b in extract_code_blocks(LAST_RESPONSE["text"]):
-                if b["filename"] == arg or os.path.basename(b["filename"]) == os.path.basename(arg):
-                    _save_block(b, save_root, turn, args); return
-        print(tr("save_not_found", arg=arg)); return
+
+        print(tr("save_not_found", arg=arg))
+        return
+
+    # 2. Если вызван без аргументов: извлекаем блоки кода и медиа
     blocks = extract_code_blocks(LAST_RESPONSE["text"]) if LAST_RESPONSE["text"] else []
     media_entries = LAST_RESPONSE.get("media", [])
+
     if not blocks and not media_entries:
-        print(tr("save_no_blocks_or_media")); return
+        print(tr("save_no_blocks_or_media"))
+        return
+
     total = len(blocks) + len(media_entries)
     print(tr("save_found_count", count=total, turn=turn))
     i = 0
@@ -1703,13 +1801,16 @@ def cmd_save(manifest, save_root, arg, args):
         i += 1
         target = os.path.join(save_root, b["filename"])
         size = human_size(len(b["code"].encode("utf-8")))
-        print(f"  {i}) [code]  {b['filename']} ({b['lang'] or 'txt'}, {size}) → {target}")
+        first_line = b["code"].split("\n")[0][:40]
+        print(f"  {i}) [code]  {b['filename']} ({b['lang'] or 'code'}, {size}) -> {first_line}...")
     for m in media_entries:
         i += 1
         target = os.path.join(save_root, m["name"])
-        print(f"  {i}) [media] {m['name']} ({m['mime']}, {human_size(m['size'])}) → {target}")
+        print(f"  {i}) [media] {m['name']} ({m['mime']}, {human_size(m['size'])})")
+
     if not args.yes and not ask_yes_no(tr("save_ask_all"), default=False):
         return
+
     for b in blocks:
         _save_block(b, save_root, turn, args)
     for m in media_entries:
@@ -1722,7 +1823,7 @@ def cmd_focus(client, manifest, pattern, text_message, args):
     if not entry:
         print(tr("focus_not_found", pattern=pattern)); return None
     state = resolve_file_state(entry)
-    name = normalize_display_name(entry.get("display_name", "?"))
+    name = entry.get("display_name", "?")  # Полное имя для контекста
     if entry.get("source") != "generated":
         if state == "out-of-sync":
             if args.sync_check == "auto":
@@ -1925,7 +2026,7 @@ def cmd_send(client, manifest, session_id, args, paths, text_message):
     return request_parts, unresolved
 
 
-# ─── F2: /apply (saved/ -> dst) ──────────────────────────────────────────
+# ─── F2: /apply ──────────────────────────────────────────────────────────
 def _default_apply_dst(manifest, session_id, project_root):
     proj = manifest.data.get("project_path")
     if project_root and os.path.isdir(project_root):
@@ -2027,7 +2128,7 @@ def _forget_entry(client, manifest, entry, args, dry_run=False):
         print(tr("forget_dry_run", name=name))
         return True
 
-    # ТЗ Раздел 5: Для detached файлов вызываем client.files.delete()
+    # Для detached файлов вызываем client.files.delete()
     if is_detached and entry.get("files_api_uri"):
         _delete_cloud_file(client, entry["files_api_uri"])
 
@@ -2328,7 +2429,7 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
             if raw == "/history":
                 cmd_history(manifest); continue
 
-            # /sync (REPL command)
+            # /sync
             if raw == "/sync" or raw.startswith("/sync "):
                 target_p = raw[5:].strip().strip("\"'") or None
                 sync_session(client, manifest, args, dry_run=args.dry_run, extra_path=target_p)
@@ -2378,7 +2479,7 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
                 _process_response(response, manifest, log, sdir)
                 continue
 
-            # /save
+            # /save (сохраняет только блоки КОДА из ответа модели)
             if raw == "/save" or raw.startswith("/save "):
                 body = raw[5:].strip()
                 try:
@@ -2388,7 +2489,7 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
                 arg = tokens[0] if tokens else None
                 cmd_save(manifest, save_root, arg, args); continue
 
-            # /md
+            # /md (сохраняет полный ТЕКСТ сообщения модели)
             if raw == "/md" or raw.startswith("/md "):
                 filename = raw[3:].strip()
                 if not filename:
