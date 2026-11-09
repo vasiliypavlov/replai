@@ -1,4 +1,4 @@
-# replai v0.0.5
+# replai v0.0.7
 # Terminal REPL for Gemini — project-aware code chat with file round-trip.
 # State dir: ./replai/ (visible, portable). No hidden dirs.
 # License: MIT
@@ -49,7 +49,7 @@ except ImportError:
 from google import genai
 from google.genai import types
 
-__version__ = "0.0.5"
+__version__ = "0.0.7"
 
 # ─── Localization (i18n) ──────────────────────────────────────────────────
 CURRENT_LANG = os.environ.get("REPLAI_LANG", "ru").lower().strip()
@@ -115,11 +115,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "extracting_zip": "Распаковка архива проекта в {dir}...",
         "scanning_proj": "Сканирование: {path}",
         "indexed_files": "  Индексировано файлов: {count}",
-        "sync_banner": "Запуск синхронизации с хранилищем Gemini...",
+        "sync_banner": "Запуск синхронизации с хранилищем Gemini (Local -> Cloud)...",
         "sync_summary": "\nИтог синхронизации:",
         "sync_reuploaded": "✓ Перезалит: {name}",
         "sync_uploaded": "✓ Загружен: {name}",
-        "sync_lvl1_prompt": "Загрузить все найденные файлы ({count})? [Y/n] (Y — да для всех, n — перейти к пошаговому выбору): ",
+        "sync_summary_header": "Найдено файлов для загрузки: {count}\n\nСводка:",
+        "sync_lvl1_summary_prompt": "Загрузить все найденные файлы ({count})? [Y/n/l] (Y — все, n — по папкам, l — полный список): ",
         "sync_lvl2_dir_prompt": "Папка '{dir}' ({count} файлов). Загрузить все файлы каталога? [y/N/a] (y — да для всех, N — пропустить папку, a — спрашивать по каждому): ",
         "sync_lvl3_file_prompt": "Загрузить файл '{name}'? [y/N]: ",
         "sync_ask_reupload": "⚠ {name} изменился. Перезалить? [y/N]: ",
@@ -145,6 +146,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "warn_size_limit": "⚠ {path}: {size} > {limit} {unit}. Продолжить? [y/N]: ",
         "warn_total_size": "⚠ Суммарный объём запроса {size}. Продолжить? [y/N]: ",
         "mention_not_found": "⚠ @{target}: файл не найден в сессии",
+        "mention_ambiguous": "⚠ Неоднозначное имя @{target}. Найдено {count} файлов. Укажите полное имя из /list.",
         "mention_command_hint": "⚠ @{target}: это имя команды, а не файла. Используйте /{name}.",
         "mention_reupload": "⚠ @{target}: копия в хранилище {reason}. Загрузить актуальную версию с диска? [Y/n]: ",
         "mention_local_missing": "⚠ @{target}: локальный файл отсутствует на диске для загрузки.",
@@ -176,6 +178,8 @@ STRINGS: dict[str, dict[str, str]] = {
             "Отвечай профессионально, структурированно и строго по делу.\n"
             "Всегда оформляй блоки с кодом в тройные обратные кавычки с явным указанием языка."
         ),
+        "system_prompt_file_too_large": "Файл пропущен в системном промпте из-за размера ({size}). Доступен по запросу через /focus или @.",
+        "system_prompt_context_limit": "Достигнут глобальный лимит контекста (500 000 символов). Остальные файлы проекта доступны через /focus или @.",
         "proj_structure_header": "Структура проекта",
         "proj_contents_header": "Содержимое файлов проекта",
         "banner_active": " replai v{ver} — сессия активна",
@@ -202,6 +206,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "save_unchanged": "⏭ Без изменений: {path}",
         "save_success": "✓ Сохранён блок кода: {path}",
         "save_copied": "✓ Скопировано: {path}",
+        "save_zip_success": "✓ Создан ZIP-архив: {path} ({size}, файлов: {count})",
+        "save_zip_empty": "В ответе модели или отправленных материалах нет файлов для упаковки в ZIP.",
         "save_api_download_unsupported": "⚠ Скачивание из Gemini Files API для {name} пока не поддерживается.\n   URI: {uri}",
         "save_fail_content": "Не удалось получить содержимое файла: {name}",
         "save_not_found": "Не найдено ни в коде ответа модели, ни в сессии: {arg}",
@@ -216,16 +222,18 @@ STRINGS: dict[str, dict[str, str]] = {
         "md_usage": "Использование: /md <filename.md>",
         "md_no_response": "Ответ модели отсутствует.",
         "md_success": "✓ Текст ответа сохранён: {path} ({size})",
-        "apply_usage": "Использование: /apply <src> [dst]  — src: имя/glob/папка; dst по умолчанию = --project",
-        "apply_no_project": "Ошибка: dst не указан и нет --project. Укажите /apply <src> <dst>.",
-        "apply_not_found": "Не найдено подходящих файлов в сессии: {pattern}",
-        "apply_plan": "\nПрименить {count} файлов: {src} → {dst}",
-        "apply_ask": "Применить изменения к проекту? [y/N]: ",
-        "apply_conflict": "⚠ {target} существует. Перезаписать? [y/N]: ",
-        "apply_local_missing": "⚠ {name}: исходный файл недоступен",
-        "apply_success": "✓ {target}",
-        "apply_err": "⚠ {target}: {err}",
-        "apply_done": "Применено: {done}/{total}",
+        "apply_banner": "Синхронизация Cloud -> Local (/apply)...",
+        "apply_target_dir": "Целевая директория: {dir}",
+        "apply_not_found": "Не найдено файлов в сессии по запросу: {pattern}",
+        "apply_downloaded": "✓ Скачан из облака: {name} → {path}",
+        "apply_overwritten": "✓ Обновлен локальный файл: {path}",
+        "apply_skipped": "⏭ Без изменений (версии совпадают): {name}",
+        "apply_out_of_sync_ask": "⚠ {name} изменён локально. Перезаписать облачной версией? [y/N]: ",
+        "apply_new_local_ask": "⚠ {name}: есть локально, но нет в облаке. Оставить [Enter] или переместить в корзину [d]? ",
+        "apply_trashed": "🗑 Перемещён в корзину: {path}",
+        "apply_lost": "✗ {name}: файл безвозвратно потерян (нет ни локально, ни в облаке)",
+        "apply_download_err": "⚠ Ошибка скачивания {name} из облака: {err}",
+        "apply_summary": "\nИтог /apply:\n  Скачано/обновлено: {downloaded}\n  Пропущено: {skipped}\n  В корзине: {trashed}\n  Ошибок/потеряно: {lost}",
         "forget_usage": "Использование: /forget <pattern> [--dry-run]",
         "forget_not_found": "Не найдено файлов в сессии по паттерну: {pattern}",
         "forget_generated_warn": "⚠ {name} — сгенерированное медиа. Удалить запись (файл в media/ останется)? [y/N]: ",
@@ -235,23 +243,25 @@ STRINGS: dict[str, dict[str, str]] = {
         "media_saved_notify": "\n[{count} медиафайл(ов) автосохранено в media/]",
         "media_save_err": "⚠ Не удалось сохранить {name}: {err}",
         "files_api_failed": "⚠ Обработка файла в Google Files API провалена: {path}",
+        "upload_processing_wait": "Обработка файла в облаке: {name} ",
         "parse_err_paths": "Ошибка парсинга путей: {err}",
         "parse_err_syntax": "Ошибка синтаксиса аргументов: {err}",
         "age_just_now": "только что",
         "age_mins": "{n} мин назад",
         "age_hours": "{n} ч назад",
         "age_days": "{n} дн назад",
+        "list_col_name": "имя в облаке / локальное имя",
         "help_text": """
 Команды replai:
-  /list                      — список файлов сессии
+  /list                      — список файлов сессии (облачные и локальные имена)
   /focus <pattern> [текст]   — передать файл модели (#1, имя, glob) с инструкцией
   @<path> в тексте           — упоминание файла из хранилища (Files API)
   /send <path...> [--text X] — загрузить новый файл(ы) и отправить в контекст
-  /save [path]               — сохранить только блоки КОДА из ответа модели в saved/
-  /md <file>                 — сохранить весь ТЕКСТ ответа модели в Markdown
-  /apply <src> [dst]         — выгрузить сохранённые файлы из saved/ в проект
+  /save [path] [--zip]       — сохранить код из ответа в saved/ (или в ZIP при --zip)
+  /md <file>                 — записать весь последний ответ в Markdown
+  /apply [pattern]           — Smart Pull: скачать файлы из облака на диск (в проект)
   /forget <pattern>          — удалить запись (detached-файлы удаляются и из облака)
-  /sync [path]               — синхронизировать проект или новую папку с хранилищем
+  /sync [path]               — загрузить локальные файлы в облако (Local -> Cloud)
   /session                   — статус и параметры сессии
   /history                   — журнал ходов текущей сессии
   /help                      — справка
@@ -319,11 +329,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "extracting_zip": "Extracting project archive to {dir}...",
         "scanning_proj": "Scanning: {path}",
         "indexed_files": "  Indexed files: {count}",
-        "sync_banner": "Starting synchronization with Gemini storage...",
+        "sync_banner": "Starting synchronization with Gemini storage (Local -> Cloud)...",
         "sync_summary": "\nSync Summary:",
         "sync_reuploaded": "✓ Re-uploaded: {name}",
         "sync_uploaded": "✓ Uploaded: {name}",
-        "sync_lvl1_prompt": "Upload all {count} files to cloud? [Y/n] (Y — all, n — choose directories/files): ",
+        "sync_summary_header": "Found files to upload: {count}\n\nSummary:",
+        "sync_lvl1_summary_prompt": "Upload all {count} files to cloud? [Y/n/l] (Y — all, n — choose folders, l — view full list): ",
         "sync_lvl2_dir_prompt": "Folder '{dir}' ({count} files). Upload all files in this directory? [y/N/a] (y — yes for all, N — skip folder, a — ask each): ",
         "sync_lvl3_file_prompt": "Upload file '{name}'? [y/N]: ",
         "sync_ask_reupload": "⚠ {name} has changed. Re-upload? [y/N]: ",
@@ -349,6 +360,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "warn_size_limit": "⚠ {path}: {size} > {limit} {unit}. Continue? [y/N]: ",
         "warn_total_size": "⚠ Total request volume {size}. Continue? [y/N]: ",
         "mention_not_found": "⚠ @{target}: file not found in session",
+        "mention_ambiguous": "⚠ Ambiguous name @{target}. Found {count} files. Specify the full name from /list.",
         "mention_command_hint": "⚠ @{target}: this is a command name, not a file. Use /{name}.",
         "mention_reupload": "⚠ @{target}: storage copy {reason}. Re-upload local version? [Y/n]: ",
         "mention_local_missing": "⚠ @{target}: local file unavailable for re-upload.",
@@ -380,6 +392,8 @@ STRINGS: dict[str, dict[str, str]] = {
             "Respond professionally, structured, and strictly to the point.\n"
             "Always wrap code blocks in triple backticks with explicit language identifiers."
         ),
+        "system_prompt_file_too_large": "File omitted from system prompt due to size ({size}). Available on demand via /focus or @mention.",
+        "system_prompt_context_limit": "Global context limit reached (500,000 characters). Remaining project files available on demand via /focus or @mention.",
         "proj_structure_header": "Project Structure",
         "proj_contents_header": "Project File Contents",
         "banner_active": " replai v{ver} — session active",
@@ -406,6 +420,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "save_unchanged": "⏭ Unchanged: {path}",
         "save_success": "✓ Code block saved: {path}",
         "save_copied": "✓ Copied: {path}",
+        "save_zip_success": "✓ Created ZIP archive: {path} ({size}, files: {count})",
+        "save_zip_empty": "No code blocks or media in response to pack into ZIP.",
         "save_api_download_unsupported": "⚠ Downloading from Gemini Files API for {name} not supported yet.\n   URI: {uri}",
         "save_fail_content": "Failed to retrieve content for file: {name}",
         "save_not_found": "Found neither in model code response nor in session: {arg}",
@@ -420,16 +436,18 @@ STRINGS: dict[str, dict[str, str]] = {
         "md_usage": "Usage: /md <filename.md>",
         "md_no_response": "Model response is missing.",
         "md_success": "✓ Response text saved: {path} ({size})",
-        "apply_usage": "Usage: /apply <src> [dst]  — src: name/glob/dir; dst defaults to --project",
-        "apply_no_project": "Error: dst not specified and no --project. Use /apply <src> <dst>.",
-        "apply_not_found": "No matching session files found: {pattern}",
-        "apply_plan": "\nApply {count} files: {src} → {dst}",
-        "apply_ask": "Apply changes to project? [y/N]: ",
-        "apply_conflict": "⚠ {target} exists. Overwrite? [y/N]: ",
-        "apply_local_missing": "⚠ {name}: source file unavailable",
-        "apply_success": "✓ {target}",
-        "apply_err": "⚠ {target}: {err}",
-        "apply_done": "Applied: {done}/{total}",
+        "apply_banner": "Synchronizing Cloud -> Local (/apply)...",
+        "apply_target_dir": "Target directory: {dir}",
+        "apply_not_found": "No files found matching: {pattern}",
+        "apply_downloaded": "✓ Downloaded from cloud: {name} → {path}",
+        "apply_overwritten": "✓ Updated local file: {path}",
+        "apply_skipped": "⏭ Unchanged (hashes match): {name}",
+        "apply_out_of_sync_ask": "⚠ {name} modified locally. Overwrite with cloud version? [y/N]: ",
+        "apply_new_local_ask": "⚠ {name}: present on disk, missing in cloud. Keep [Enter] or move to trash [d]? ",
+        "apply_trashed": "🗑 Moved to trash: {path}",
+        "apply_lost": "✗ {name}: file irreversibly lost (missing locally and in cloud)",
+        "apply_download_err": "⚠ Error downloading {name} from cloud: {err}",
+        "apply_summary": "\n/apply Summary:\n  Downloaded/updated: {downloaded}\n  Skipped: {skipped}\n  Trashed: {trashed}\n  Errors/lost: {lost}",
         "forget_usage": "Usage: /forget <pattern> [--dry-run]",
         "forget_not_found": "No files matched pattern: {pattern}",
         "forget_generated_warn": "⚠ {name} is generated media. Remove entry (media/ file kept)? [y/N]: ",
@@ -439,23 +457,25 @@ STRINGS: dict[str, dict[str, str]] = {
         "media_saved_notify": "\n[{count} media file(s) auto-saved to media/]",
         "media_save_err": "⚠ Failed to save {name}: {err}",
         "files_api_failed": "⚠ File processing failed in Google Files API: {path}",
+        "upload_processing_wait": "Processing file in cloud: {name} ",
         "parse_err_paths": "Path parsing error: {err}",
         "parse_err_syntax": "Argument syntax error: {err}",
         "age_just_now": "just now",
         "age_mins": "{n}m ago",
         "age_hours": "{n}h ago",
         "age_days": "{n}d ago",
+        "list_col_name": "cloud name / local name",
         "help_text": """
 replai commands:
-  /list                      — list session files
+  /list                      — list session files (cloud and local names)
   /focus <pattern> [text]    — focus model on file (#1, name, glob) with instruction
   @<path> in text            — mention file from storage (Files API)
   /send <path...> [--text X] — upload new file(s) and send to context
-  /save [path]               — save only CODE blocks from response into saved/
+  /save [path] [--zip]       — save code from response into saved/ (or ZIP with --zip)
   /md <file>                 — export full response TEXT to Markdown
-  /apply <src> [dst]         — export files from saved/ into actual project
+  /apply [pattern]           — Smart Pull: download files from cloud to disk (into project)
   /forget <pattern>          — remove entry (detached files also deleted from cloud)
-  /sync [path]               — synchronize project or new folder with storage
+  /sync [path]               — upload local files to cloud (Local -> Cloud)
   /session                   — session status and parameters
   /history                   — turn history of current session
   /help                      — cheatsheet
@@ -486,10 +506,25 @@ MANIFEST_FILE = "manifest.json"
 LOG_FILE = "log.txt"
 SAVED_SUBDIR = "saved"
 MEDIA_SUBDIR = "media"
+TRASH_SUBDIR = "trash"
+DOWNLOADS_SUBDIR = "downloads"
 SESSION_MENU_LIMIT = 20
 
 _SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}$")
 _MENTION_RE = re.compile(r'(?:^|(?<=[\s(\["]))@(?:"([^"]+)"|((?:[^\s"()\[\]\\]|\\.)+))')
+
+_CYRILLIC_TO_LATIN = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+    'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch',
+    'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'Yo',
+    'Ж': 'Zh', 'З': 'Z', 'И': 'I', 'Й': 'Y', 'К': 'K', 'Л': 'L', 'М': 'M',
+    'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U',
+    'Ф': 'F', 'Х': 'Kh', 'Ц': 'Ts', 'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Shch',
+    'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu', 'Я': 'Ya'
+}
 
 TEXT_EXTENSIONS = {
     ".py", ".pyi", ".pyx", ".md", ".rst", ".txt",
@@ -596,6 +631,31 @@ def sha256_of_file(path: str) -> str:
     return h.hexdigest()
 
 
+def sanitize_display_name(name: str) -> str:
+    """Транслитерирует не-ASCII символы в латиницу, защищая от коллизий коротким хешем."""
+    stem, ext = os.path.splitext(name)
+    has_untranslatable = False
+    res = []
+    for ch in stem:
+        if ch in _CYRILLIC_TO_LATIN:
+            res.append(_CYRILLIC_TO_LATIN[ch])
+        elif ord(ch) < 128 and (ch.isalnum() or ch in "._- /\\"):
+            res.append(ch)
+        else:
+            res.append("_")
+            has_untranslatable = True
+
+    safe_stem = "".join(res)
+    clean_stem = re.sub(r"_+", "_", safe_stem).strip("_")
+    if not clean_stem:
+        clean_stem = "file"
+
+    if has_untranslatable:
+        h = hashlib.md5(name.encode("utf-8", errors="replace")).hexdigest()[:6]
+        return f"{clean_stem}_{h}{ext}"
+    return f"{clean_stem}{ext}"
+
+
 def normalize_display_name(name: str) -> str:
     s = (name or "").replace("\\", "/")
     s = re.sub(r"^(?:replai_)+", "replai_", s)
@@ -611,7 +671,8 @@ def normalize_display_name(name: str) -> str:
 def make_display_name(session_id: str, rel_path: str) -> str:
     sid = session_id[len("replai_"):] if session_id.startswith("replai_") else session_id
     rel_path = rel_path.replace(os.sep, "/").lstrip("/")
-    return f"replai_{sid}_{rel_path}"
+    safe_rel = sanitize_display_name(rel_path)
+    return f"replai_{sid}_{safe_rel}"
 
 
 def ensure_dir(p: str) -> str:
@@ -646,24 +707,48 @@ def is_explicit_path(p: str) -> bool:
     )
 
 
+def _soft_delete(sdir: str, local_path: str, rel_name: str) -> str | None:
+    """Мягкое перемещение файла в <sdir>/trash/ с защитой от коллизий."""
+    if not os.path.isfile(local_path):
+        return None
+    trash_root = ensure_dir(os.path.join(sdir, TRASH_SUBDIR))
+    clean_rel = normalize_display_name(rel_name)
+    target = os.path.join(trash_root, clean_rel)
+    ensure_dir(os.path.dirname(target) or ".")
+
+    if os.path.exists(target):
+        stem, ext = os.path.splitext(target)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target = f"{stem}_{ts}{ext}"
+
+    try:
+        shutil.move(local_path, target)
+        return target
+    except OSError as e:
+        print(f"⚠ Ошибка перемещения в корзину: {e}", file=sys.stderr)
+        return None
+
+
 def parse_send_args(body: str) -> tuple[list[str], str]:
     body = body.strip()
     if not body:
         return [], ""
+
+    is_posix = (sys.platform != "win32")
 
     if "--text" in body.split():
         idx = body.find("--text")
         pre = body[:idx].strip()
         post = body[idx + len("--text"):].strip()
         try:
-            raw_paths = shlex.split(pre)
+            raw_paths = shlex.split(pre, posix=is_posix)
         except ValueError as e:
             raise ValueError(tr("parse_err_paths", err=e)) from e
-        paths = [t for t in raw_paths if t]
+        paths = [t.strip("\"'") for t in raw_paths if t.strip("\"'")]
         return paths, post
 
     try:
-        tokens = shlex.split(body)
+        tokens = shlex.split(body, posix=is_posix)
     except ValueError as e:
         raise ValueError(tr("parse_err_syntax", err=e)) from e
 
@@ -671,11 +756,12 @@ def parse_send_args(body: str) -> tuple[list[str], str]:
     text_parts: list[str] = []
     collecting_paths = True
     for tok in tokens:
+        stripped = tok.strip("\"'")
         if collecting_paths:
-            if os.path.exists(tok):
-                paths.append(tok)
+            if os.path.exists(stripped):
+                paths.append(stripped)
             elif not paths:
-                paths.append(tok)
+                paths.append(stripped)
                 collecting_paths = False
             else:
                 collecting_paths = False
@@ -873,7 +959,6 @@ def scan_project(
     include_ide: bool = False,
     include_ignored: bool = False,
 ) -> tuple[list[dict], list[dict]]:
-    """Сканирует проект. Возвращает (included_files, gitignored_files)."""
     root = os.path.abspath(root)
     if os.path.isfile(root):
         kind = classify_file(root)
@@ -1031,11 +1116,11 @@ class Manifest:
         return matches[0] if matches else None
 
     def find_all_files(self, query: str) -> list[dict]:
+        """Ищет все файлы по точному имени, индексу, локальному имени, префиксу папки или glob."""
         files = self.files()
         if not files or not query:
             return []
 
-        # Поддержка поиска по индексу #1, #2 и т.д.
         raw_idx = query.lstrip("#")
         if raw_idx.isdigit():
             idx = int(raw_idx) - 1
@@ -1047,20 +1132,20 @@ class Manifest:
 
         matched = []
         for f in files:
-            disp_name = f.get("display_name", "")
-            fn = normalize_display_name(disp_name)
+            disp = f.get("display_name", "")
+            norm = normalize_display_name(disp)
             name_base = f.get("name", "")
-            
-            # 1. Точное совпадение (введено полное имя из /list, короткое имя или базовое)
-            if query_clean == disp_name or query_norm == fn or query_clean == fn or query_clean == name_base:
+            loc = f.get("local_path", "")
+            loc_base = os.path.basename(loc) if loc else ""
+
+            # Прямые совпадения (включая оригинальное имя с кириллицей)
+            if query_clean in (disp, norm, name_base, loc_base) or query_norm in (norm, name_base, loc_base):
                 matched.append(f)
-                
-            # 2. Поиск по маске (glob) - проверяем и полное имя, и нормализованное
-            elif fnmatch.fnmatch(disp_name, query_clean) or fnmatch.fnmatch(fn, query_clean) or fnmatch.fnmatch(name_base, query_clean):
+            elif fnmatch.fnmatch(disp, query_clean) or fnmatch.fnmatch(norm, query_clean) or \
+                 fnmatch.fnmatch(name_base, query_clean) or (loc_base and fnmatch.fnmatch(loc_base, query_clean)):
                 matched.append(f)
-                
-            # 3. Поиск по папке (введено имя папки, возможно с префиксом из /list)
-            elif fn.startswith(query_norm.rstrip("/") + "/"):
+            # Вхождение в директорию
+            elif norm.startswith(query_norm.rstrip("/") + "/") or disp.startswith(query_clean.rstrip("/") + "/"):
                 matched.append(f)
 
         return matched
@@ -1116,12 +1201,27 @@ def record_turn(manifest: Manifest, log: SessionLog, role: str, text: str,
 
 
 # ─── Sync state ───────────────────────────────────────────────────────────
+def is_file_expired(entry: dict) -> bool:
+    exp_str = entry.get("expires_at")
+    if not exp_str:
+        return False
+    exp_dt = _parse_iso_to_naive_local(exp_str)
+    return bool(exp_dt and exp_dt < datetime.now())
+
+
 def resolve_file_state(entry: dict) -> str:
     if entry.get("source") == "generated":
         return "ok"
+
+    if is_file_expired(entry):
+        entry.pop("files_api_uri", None)
+        entry.pop("files_api_sha256", None)
+        entry.pop("expires_at", None)
+
     local = entry.get("local_path")
     has_local = bool(local) and os.path.isfile(local)
     has_api = bool(entry.get("files_api_uri"))
+
     if has_local and has_api:
         try:
             sha_now = sha256_of_file(local)
@@ -1136,30 +1236,86 @@ def resolve_file_state(entry: dict) -> str:
 
 
 def _upload(client, abs_path, display_name):
+    import tempfile
+    tmp_path = None
     try:
-        uploaded = client.files.upload(file=abs_path, config={"display_name": display_name})
+        # 1. Защита от кириллицы в локальном пути (Баг Google SDK)
+        try:
+            abs_path.encode('ascii')
+            target_upload_path = abs_path
+        except UnicodeEncodeError:
+            ext = os.path.splitext(abs_path)[1]
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp_path = tmp.name
+                with open(abs_path, "rb") as f_in:
+                    shutil.copyfileobj(f_in, tmp)
+            target_upload_path = tmp_path
+
+        # 2. Загрузка (используем безопасный путь)
+        uploaded = client.files.upload(file=target_upload_path, config={"display_name": display_name})
+        
         state_prop = getattr(uploaded, "state", None)
         state_name = getattr(state_prop, "name", str(state_prop or ""))
+
+        # 3. Ожидание обработки (с backoff и точками)
+        delay = 2.0
+        dots_printed = False
         while state_name == "PROCESSING":
-            time.sleep(1.5)
+            if not dots_printed:
+                print(tr("upload_processing_wait", name=display_name), end="", flush=True)
+                dots_printed = True
+            else:
+                print(".", end="", flush=True)
+            time.sleep(delay)
+            delay = min(delay * 1.5, 10.0)
             uploaded = client.files.get(name=uploaded.name)
             state_prop = getattr(uploaded, "state", None)
             state_name = getattr(state_prop, "name", str(state_prop or ""))
+
+        if dots_printed:
+            print()
+
         if state_name == "FAILED":
             print(tr("files_api_failed", path=abs_path), file=sys.stderr)
             return None, None, None
+            
         uri = getattr(uploaded, "uri", None)
         sha = getattr(uploaded, "sha256_hash", None)
         exp = getattr(uploaded, "expiration_time", None)
         exp_str = exp.isoformat() if hasattr(exp, "isoformat") else (str(exp) if exp else None)
         return uri, sha, exp_str
+        
     except Exception as e:
         print(tr("file_read_err", path=abs_path, err=e), file=sys.stderr)
         return None, None, None
+    finally:
+        # Убираем за собой мусор
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _download_cloud_file(client, file_uri_or_name: str) -> bytes | None:
+    if not file_uri_or_name:
+        return None
+    m = re.search(r"files/[a-zA-Z0-9_\-]+", file_uri_or_name)
+    resource_name = m.group(0) if m else file_uri_or_name
+    try:
+        res = client.files.download(file=resource_name)
+        if isinstance(res, bytes):
+            return res
+        if hasattr(res, "read"):
+            return res.read()
+        if hasattr(res, "content"):
+            return res.content
+        return bytes(res)
+    except Exception:
+        return None
 
 
 def _delete_cloud_file(client, file_uri_or_name: str) -> bool:
-    """Удаляет файл из Google Files API."""
     if not file_uri_or_name:
         return False
     m = re.search(r"files/[a-zA-Z0-9_\-]+", file_uri_or_name)
@@ -1179,14 +1335,10 @@ def sync_session(
     dry_run: bool = False,
     extra_path: str | None = None,
 ) -> dict[str, int]:
-    """
-    Ядро синхронизации с трёхуровневым подтверждением (ТЗ v0.0.3/v0.0.4).
-    """
     print(tr("sync_banner"))
     session_id = manifest.data.get("session_id", make_session_id())
     sdir = session_dir(session_id)
 
-    # 1. Сканирование путей для добавления
     scan_targets = []
     if extra_path:
         scan_targets.append(os.path.abspath(extra_path))
@@ -1214,7 +1366,6 @@ def sync_session(
             include_ignored=include_ignored_flag,
         )
 
-        # Обработка .gitignore
         if ignored_files and not include_ignored_flag:
             if sys.stdin.isatty() and not getattr(args, "yes", False):
                 ans = input(tr("sync_gitignore_ask", path=os.path.basename(p_root), count=len(ignored_files))).strip().lower()
@@ -1235,7 +1386,6 @@ def sync_session(
             }
             manifest.add_file(entry)
 
-    # 2. Выявление статусов и сбор файлов для загрузки
     summary = {"ok": 0, "out-of-sync": 0, "new-local": 0, "detached": 0, "lost": 0}
     detached_entries: list[dict] = []
     pending_uploads: list[dict] = []
@@ -1245,20 +1395,23 @@ def sync_session(
             continue
         state = resolve_file_state(entry)
         summary[state] = summary.get(state, 0) + 1
-        name = normalize_display_name(entry.get("display_name", "?"))
+        name = entry.get("display_name", "?")
 
         if state == "detached":
             detached_entries.append(entry)
-        elif state == "lost":
-            print(tr("sync_lost", name=name))
-        elif state in ("new-local", "out-of-sync"):
+            continue
+        if state in ("ok", "lost"):
+            if state == "lost":
+                print(tr("sync_lost", name=name))
+            continue
+
+        if state in ("new-local", "out-of-sync"):
             pending_uploads.append(entry)
 
-    # 3. Трёхуровневый режим подтверждения загрузки
     if pending_uploads and not dry_run:
         def do_upload(entry):
             state_before = resolve_file_state(entry)
-            name = normalize_display_name(entry.get("display_name", "?"))
+            name = entry.get("display_name", "?")
             uri, sha, exp = _upload(client, entry["local_path"], entry["display_name"])
             if uri:
                 entry["files_api_uri"] = uri
@@ -1271,27 +1424,57 @@ def sync_session(
                 else:
                     print(tr("sync_uploaded", name=name))
 
-        # Уровень 1: Загрузить абсолютно все файлы?
         upload_all = False
         if getattr(args, "yes", False):
             upload_all = True
         elif sys.stdin.isatty():
-            upload_all = ask_yes_no(tr("sync_lvl1_prompt", count=len(pending_uploads)), default=True)
+            grouped = defaultdict(list)
+            root_files = []
+            for entry in pending_uploads:
+                norm_rel = normalize_display_name(entry.get("display_name", entry.get("name", "")))
+                d = os.path.dirname(norm_rel)
+                if d:
+                    grouped[d].append(entry)
+                else:
+                    root_files.append(entry)
+
+            print(tr("sync_summary_header", count=len(pending_uploads)))
+            for d, f_list in sorted(grouped.items()):
+                print(f"  📁 {d}/ ({len(f_list)} шт.)")
+            for f in root_files:
+                fn = normalize_display_name(f.get("display_name", f.get("name", "")))
+                print(f"  📄 {fn}")
+            print()
+
+            while True:
+                choice = input(tr("sync_lvl1_summary_prompt", count=len(pending_uploads))).strip().lower()
+                if choice in ("l", "list", "с", "список"):
+                    print("\n" + "=" * 50)
+                    for idx, entry in enumerate(pending_uploads, 1):
+                        fn = normalize_display_name(entry.get("display_name", entry.get("name", "")))
+                        print(f"  {idx:>3}) {fn} ({human_size(entry.get('size', 0))})")
+                    print("=" * 50 + "\n")
+                    continue
+                elif choice in ("y", "yes", "д", "да", ""):
+                    upload_all = True
+                    break
+                else:
+                    upload_all = False
+                    break
 
         if upload_all:
             for entry in pending_uploads:
                 do_upload(entry)
         else:
-            # Уровень 2 и 3: Группировка по папкам и поштучное подтверждение
             grouped = defaultdict(list)
             for entry in pending_uploads:
-                rel = normalize_display_name(entry.get("display_name", entry.get("name", "")))
-                d = os.path.dirname(rel)
+                norm_rel = normalize_display_name(entry.get("display_name", entry.get("name", "")))
+                d = os.path.dirname(norm_rel)
                 grouped[d].append(entry)
 
             for d, files in grouped.items():
                 d_name = d if d else ("(root)" if CURRENT_LANG == "en" else "(корень)")
-                dir_choice = "a"  # default: спрашивать по каждому
+                dir_choice = "a"
 
                 if sys.stdin.isatty() and not getattr(args, "yes", False):
                     ans = input(tr("sync_lvl2_dir_prompt", count=len(files), dir=d_name)).strip().lower()
@@ -1308,7 +1491,6 @@ def sync_session(
                     for entry in files:
                         do_upload(entry)
                 else:
-                    # Уровень 3: Поштучный запрос по каждому файлу
                     for entry in files:
                         f_name = normalize_display_name(entry.get("display_name", entry.get("name", "")))
                         if getattr(args, "yes", False) or ask_yes_no(tr("sync_lvl3_file_prompt", name=f_name), default=False):
@@ -1318,7 +1500,6 @@ def sync_session(
         for entry in pending_uploads:
             print(f"[dry-run] {resolve_file_state(entry)}: {entry.get('local_path')}")
 
-    # 4. Обработка detached файлов
     if detached_entries and not dry_run:
         clean_detached_allowed = False
         if not sys.stdin.isatty():
@@ -1331,7 +1512,7 @@ def sync_session(
 
         if clean_detached_allowed:
             for entry in list(detached_entries):
-                d_name = normalize_display_name(entry.get("display_name", "?"))
+                d_name = entry.get("display_name", "?")
                 uri = entry.get("files_api_uri")
                 if uri:
                     _delete_cloud_file(client, uri)
@@ -1342,7 +1523,7 @@ def sync_session(
                     pass
         else:
             for entry in detached_entries:
-                print(tr("sync_detached", name=normalize_display_name(entry.get("display_name", "?"))))
+                print(tr("sync_detached", name=entry.get("display_name", "?")))
 
     if not dry_run:
         manifest.save()
@@ -1386,17 +1567,28 @@ def build_system_instruction(project_files, project_root):
         root_name = os.path.basename(project_root.rstrip(os.sep)) if project_root else "project"
         parts.append(f"\n## {tr('proj_structure_header')}\n\n```\n{root_name}/\n{build_tree(project_files)}\n```")
         parts.append(f"\n## {tr('proj_contents_header')}\n")
+
+        total_chars = 0
+        GLOBAL_CONTEXT_CHAR_LIMIT = 500_000
+        limit_reached = False
+
         for f in project_files:
             if f.get("kind") == "text":
-                # Защита от контекстного переполнения (файлы больше 1 МБ не инлайнятся)
-                if f.get("size", 0) > 1_000_000:
-                    parts.append(f"\n### `{f['rel_path']}`\n\n[Файл пропущен в системном промпте из-за размера ({human_size(f.get('size', 0))}). Доступен по запросу через /focus или @.]")
+                if limit_reached:
                     continue
-                
+                sz = f.get("size", 0)
+                if sz > 1_000_000:
+                    parts.append(f"\n### `{f['rel_path']}`\n\n[{tr('system_prompt_file_too_large', size=human_size(sz))}]")
+                    continue
                 p = f.get("abs_path") or f.get("local_path")
                 try:
                     with open(p, "r", encoding="utf-8", errors="replace") as fh:
                         content = fh.read()
+                    if total_chars + len(content) > GLOBAL_CONTEXT_CHAR_LIMIT:
+                        parts.append(f"\n### `{f['rel_path']}`\n\n[{tr('system_prompt_context_limit')}]")
+                        limit_reached = True
+                        continue
+                    total_chars += len(content)
                     parts.append(f"\n### `{f['rel_path']}`\n\n```\n{content}\n```")
                 except OSError as e:
                     parts.append(f"\n### `{f['rel_path']}`\n\n[{e}]")
@@ -1404,12 +1596,9 @@ def build_system_instruction(project_files, project_root):
 
 
 def extract_code_blocks(text):
-    """
-    Строго извлекает только валидные блоки кода из тройных обратных кавычек.
-    Исключает чистую прозу, списки и markdown-разметку.
-    """
+    """Строго извлекает блоки кода, допуская отсутствие переноса строки перед закрытием."""
     blocks = []
-    pattern = re.compile(r"```([\w+-]*)[^\n]*\r?\n(.*?)\r?\n```", re.DOTALL)
+    pattern = re.compile(r"```([\w+-]*)[^\n]*\r?\n(.*?)(?:\r?\n)?```", re.DOTALL)
     fname_re = re.compile(
         r"^\s*(?:#|//|<!--|/\*|--)\s*(?:[Ff]ile:\s*)?([a-zA-Z0-9_.\-/\\]+\.[a-zA-Z0-9_]+)"
     )
@@ -1419,7 +1608,6 @@ def extract_code_blocks(text):
         lang = (m.group(1) or "").strip().lower()
         code = m.group(2).strip("\r\n")
 
-        # Если блок пуст — пропускаем
         if not code.strip():
             continue
 
@@ -1435,9 +1623,7 @@ def extract_code_blocks(text):
             if pm:
                 filename = pm.group(1).replace("\\", "/")
 
-        # Фильтрация: отсекаем обычный разговорный markdown/текст, если нет признаков кода
         if lang in non_code_langs and not filename:
-            # Проверяем, есть ли явные признаки программного кода
             has_code_markers = any(kw in code for kw in ("def ", "import ", "class ", "function ", "const ", "var ", "{", "}", "SELECT ", "CREATE "))
             if not has_code_markers:
                 continue
@@ -1546,7 +1732,7 @@ def build_parts_for_entry(entry, warn_missing_local: bool = False):
     uri = entry.get("files_api_uri")
     if kind == "text" and warn_missing_local and uri:
         if not (local and os.path.isfile(local)):
-            print(f"⚠ {normalize_display_name(entry.get('display_name',''))}: "
+            print(f"⚠ {entry.get('display_name','')}: "
                   f"локальный файл недоступен, используется версия из хранилища",
                   file=sys.stderr)
 
@@ -1604,17 +1790,16 @@ def parse_args(argv=None):
     p.add_argument("--send-retries", type=int, default=4, help=tr("retries_help"))
     p.add_argument("--send-retry-delay", type=float, default=2.0, help=tr("retry_delay_help"))
 
-    # Новые лимиты по спецификации Google Files API
-    p.add_argument("--project-max-file-bytes", type=int, default=2_000_000_000)      # 2 ГБ
-    p.add_argument("--project-max-total-bytes", type=int, default=20_000_000_000)   # 20 ГБ
-    p.add_argument("--project-max-files", type=int, default=1000)                    # 1000 файлов
+    p.add_argument("--project-max-file-bytes", type=int, default=2_000_000_000)
+    p.add_argument("--project-max-total-bytes", type=int, default=20_000_000_000)
+    p.add_argument("--project-max-files", type=int, default=1000)
     p.add_argument("--project-follow-symlinks", action="store_true")
     p.add_argument("--project-include-ide-dirs", action="store_true")
     return p.parse_args(argv)
 
 
 # ─── REPL state / helpers ────────────────────────────────────────────────
-LAST_RESPONSE: dict = {"text": "", "media": [], "turn": 0}
+LAST_RESPONSE: dict = {"text": "", "media": [], "sent_blocks": [], "turn": 0}
 
 
 def cmd_list(manifest: Manifest):
@@ -1625,16 +1810,27 @@ def cmd_list(manifest: Manifest):
     type_col = "type" if CURRENT_LANG == "en" else "тип"
     status_col = "status" if CURRENT_LANG == "en" else "статус"
     size_col = "size" if CURRENT_LANG == "en" else "размер"
-    name_col = "name" if CURRENT_LANG == "en" else "имя"
+    name_col = tr("list_col_name")
+
     print(f"{'#':>4}  {type_col:<7}  {'src':<5}  {status_col:<12}  {size_col:>9}  {name_col}")
-    print("-" * 82)
+    print("-" * 88)
     for i, f in enumerate(files, 1):
-        name = f.get("display_name", "?")  # Показываем точное имя из AI Studio
+        name = f.get("display_name", "?")
         kind = f.get("kind", "?")
         src = "gen" if f.get("source") == "generated" else "in"
         status = "ok" if src == "gen" else resolve_file_state(f)
         size = human_size(f.get("size", 0))
         print(f"{i:>4}  {kind:<7}  {src:<5}  {status:<12}  {size:>9}  {name}")
+
+        # Двухстрочный вывод локального имени при различии
+        loc = f.get("local_path")
+        if loc:
+            orig_base = os.path.basename(loc)
+            norm_disp = normalize_display_name(name)
+            norm_base = os.path.basename(norm_disp)
+            if orig_base != norm_base:
+                prefix_space = " " * 47
+                print(f"{prefix_space}[{orig_base}]")
     print()
 
 
@@ -1662,6 +1858,7 @@ Manifest:    {manifest.path}
 Log:         {os.path.join(session_dir(session_id), LOG_FILE)}
 Saved:       {os.path.join(session_dir(session_id), SAVED_SUBDIR)}
 Media:       {os.path.join(session_dir(session_id), MEDIA_SUBDIR)}
+Trash:       {os.path.join(session_dir(session_id), TRASH_SUBDIR)}
 Resume:      replai --resume {session_id}
 """.strip())
 
@@ -1714,7 +1911,6 @@ def _resolve_save_target(target, turn, args):
 
 
 def _save_block(block, save_root, turn, args):
-    """Сохраняет извлеченный блок кода в файл."""
     target = os.path.join(save_root, block["filename"])
     ensure_dir(os.path.dirname(target) or ".")
     if os.path.isfile(target):
@@ -1762,33 +1958,73 @@ def _save_session_entry(entry, save_root, turn, args):
 
 
 def cmd_save(manifest, save_root, arg, args):
-    """
-    Сохраняет строго блоки КОДА из последнего ответа модели (ТЗ п. 3).
-    Приоритет: блоки кода из LAST_RESPONSE -> затем файлы сессии.
-    """
+    """Сохраняет блоки кода или создает ZIP-архив с защитой от Zip Slip."""
     ensure_dir(save_root)
     turn = LAST_RESPONSE.get("turn", 0)
 
-    # 1. Если аргумент передан: ищем блок кода в последнем ответе модели В ПЕРВУЮ ОЧЕРЕДЬ!
+    is_zip = False
+    clean_arg = None
     if arg:
+        try:
+            tokens = shlex.split(arg, posix=(sys.platform != "win32"))
+        except ValueError:
+            tokens = arg.split()
+        if "--zip" in tokens:
+            is_zip = True
+            tokens.remove("--zip")
+        clean_arg = tokens[0] if tokens else None
+
+    blocks = extract_code_blocks(LAST_RESPONSE["text"]) if LAST_RESPONSE["text"] else []
+    blocks.extend(LAST_RESPONSE.get("sent_blocks", []))
+    media_entries = LAST_RESPONSE.get("media", [])
+
+    if is_zip:
+        if not blocks and not media_entries:
+            print(tr("save_zip_empty"))
+            return
+
+        zip_fn = clean_arg or f"archive_turn{turn:03d}.zip"
+        if not zip_fn.lower().endswith(".zip"):
+            zip_fn += ".zip"
+
+        target_zip = os.path.join(save_root, zip_fn)
+        final_zip = _resolve_save_target(target_zip, turn, args)
+        if not final_zip:
+            return
+
+        with zipfile.ZipFile(final_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            # Защита от Zip Slip: очистка и нормализация путей
+            for b in blocks:
+                fn = b["filename"].replace("\\", "/").strip()
+                parts = [p for p in fn.split("/") if p and p != ".."]
+                safe_arcname = "/".join(parts) if parts else os.path.basename(b["filename"])
+                zf.writestr(safe_arcname, b["code"].encode("utf-8"))
+            for m in media_entries:
+                loc = m.get("local_path")
+                if loc and os.path.isfile(loc):
+                    m_fn = (m.get("name") or os.path.basename(loc)).replace("\\", "/").strip()
+                    parts = [p for p in m_fn.split("/") if p and p != ".."]
+                    safe_arcname = "/".join(parts) if parts else os.path.basename(loc)
+                    zf.write(loc, arcname=safe_arcname)
+
+        sz = human_size(os.path.getsize(final_zip))
+        print(tr("save_zip_success", path=final_zip, size=sz, count=len(blocks) + len(media_entries)))
+        return
+
+    if clean_arg:
         if LAST_RESPONSE["text"]:
-            for b in extract_code_blocks(LAST_RESPONSE["text"]):
-                if b["filename"] == arg or os.path.basename(b["filename"]) == os.path.basename(arg):
+            for b in blocks:
+                if b["filename"] == clean_arg or os.path.basename(b["filename"]) == os.path.basename(clean_arg):
                     _save_block(b, save_root, turn, args)
                     return
-        # Только если такого блока кода нет — проверяем файл сессии
-        entry = manifest.find_file(arg)
+        entry = manifest.find_file(clean_arg)
         if entry:
             entry_turn = entry.get("turn", turn) if isinstance(entry.get("turn"), int) else turn
             _save_session_entry(entry, save_root, entry_turn or turn, args)
             return
 
-        print(tr("save_not_found", arg=arg))
+        print(tr("save_not_found", arg=clean_arg))
         return
-
-    # 2. Если вызван без аргументов: извлекаем блоки кода и медиа
-    blocks = extract_code_blocks(LAST_RESPONSE["text"]) if LAST_RESPONSE["text"] else []
-    media_entries = LAST_RESPONSE.get("media", [])
 
     if not blocks and not media_entries:
         print(tr("save_no_blocks_or_media"))
@@ -1823,7 +2059,7 @@ def cmd_focus(client, manifest, pattern, text_message, args):
     if not entry:
         print(tr("focus_not_found", pattern=pattern)); return None
     state = resolve_file_state(entry)
-    name = entry.get("display_name", "?")  # Полное имя для контекста
+    name = entry.get("display_name", "?")
     if entry.get("source") != "generated":
         if state == "out-of-sync":
             if args.sync_check == "auto":
@@ -1856,16 +2092,12 @@ def cmd_focus(client, manifest, pattern, text_message, args):
 
 def _ensure_storage_uri(client, manifest, entry, args) -> str | None:
     uri = entry.get("files_api_uri")
-    expired = False
-    if uri and entry.get("expires_at"):
-        exp = _parse_iso_to_naive_local(entry["expires_at"])
-        if exp and exp < datetime.now():
-            expired = True
+    expired = is_file_expired(entry)
     if uri and not expired:
         return uri
 
     local = entry.get("local_path")
-    name = normalize_display_name(entry.get("display_name", "?"))
+    name = entry.get("display_name", "?")
     if not (local and os.path.isfile(local)):
         print(tr("mention_local_missing", target=name), file=sys.stderr)
         return None
@@ -1895,8 +2127,12 @@ def resolve_mentions(client, manifest, text, args):
             continue
         target = raw.replace("\\ ", " ").strip()
         target_clean = target.rstrip(",.;:!?")
-        entry = manifest.find_file(target_clean) or manifest.find_file(target)
-        if entry is None:
+
+        matches = manifest.find_all_files(target_clean)
+        if not matches:
+            matches = manifest.find_all_files(target)
+
+        if not matches:
             cmd_name = target_clean.lower().lstrip("@")
             if cmd_name in _REPL_COMMANDS:
                 print(tr("mention_command_hint", target=target_clean, name=cmd_name), file=sys.stderr)
@@ -1905,6 +2141,12 @@ def resolve_mentions(client, manifest, text, args):
             unresolved.append(target_clean)
             continue
 
+        if len(matches) > 1:
+            print(tr("mention_ambiguous", target=target_clean, count=len(matches)), file=sys.stderr)
+            unresolved.append(target_clean)
+            continue
+
+        entry = matches[0]
         uri = _ensure_storage_uri(client, manifest, entry, args)
         if not uri:
             unresolved.append(target_clean)
@@ -1915,10 +2157,10 @@ def resolve_mentions(client, manifest, text, args):
             continue
         seen.add(disp_key)
 
-        name = normalize_display_name(entry["display_name"])
-        mime = entry.get("mime") or file_mime(name)
+        full_cloud_name = entry["display_name"]
+        mime = entry.get("mime") or file_mime(full_cloud_name)
         label = "storage version" if CURRENT_LANG == "en" else "версия из хранилища"
-        parts.append(types.Part.from_text(text=f"[MENTION] {name} ({label})"))
+        parts.append(types.Part.from_text(text=f"[MENTION] {full_cloud_name} ({label})"))
         parts.append(types.Part.from_uri(file_uri=uri, mime_type=mime))
     return text, parts, unresolved
 
@@ -1928,14 +2170,17 @@ def cmd_send(client, manifest, session_id, args, paths, text_message):
     pre_total = 0
     for path in paths:
         if not os.path.isfile(path):
-            print(tr("file_not_found", path=path), file=sys.stderr); return None, None
+            print(tr("file_not_found", path=path), file=sys.stderr); return None, None, []
         valid_paths.append(path)
         pre_total += os.path.getsize(path)
     if pre_total > args.limit_request_total_mb * 1024 * 1024:
         if not (args.yes or ask_yes_no(tr("warn_total_size", size=human_size(pre_total)), default=False)):
-            return None, None
+            return None, None, []
 
     request_parts, embedded_text = [], []
+    sent_blocks = []
+    sent_media = []
+
     for path in valid_paths:
         sz = os.path.getsize(path)
         kind = classify_file(path)
@@ -1976,6 +2221,7 @@ def cmd_send(client, manifest, session_id, args, paths, text_message):
                                 with zf.open(info.filename) as zh:
                                     data = zh.read().decode("utf-8", errors="replace")
                                 embedded_text.append(f"\n## {info.filename}\n```\n{data}\n```")
+                                sent_blocks.append({"lang": lang_to_ext(z_ext), "code": data, "filename": info.filename, "order": 0})
                             except Exception: pass
                     embedded_text.append(tr("prompt_archive_end", name=base_name))
             except Exception as e:
@@ -1987,10 +2233,12 @@ def cmd_send(client, manifest, session_id, args, paths, text_message):
                 with open(path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
                 embedded_text.append(f"\n## {base_name}\n```\n{content}\n```")
+                sent_blocks.append({"lang": lang_to_ext(os.path.splitext(path)[1]), "code": content, "filename": base_name, "order": 0})
             except OSError as e:
                 print(tr("file_read_err", path=path, err=e), file=sys.stderr); continue
             manifest.add_file(entry); continue
 
+        sent_media.append(entry)
         use_api = sz > args.limit_inline_total_mb * 1024 * 1024
         if use_api:
             uri, sha, exp = _upload(client, path, display_name)
@@ -2000,13 +2248,13 @@ def cmd_send(client, manifest, session_id, args, paths, text_message):
             if exp: entry["expires_at"] = exp
             entry["uploaded_at"] = now_iso()
             manifest.add_file(entry)
-            request_parts.append(types.Part.from_text(text=f"[FILE] {base_name} (new, this turn)"))
+            request_parts.append(types.Part.from_text(text=f"[FILE] {display_name} (new, this turn)"))
             request_parts.extend(build_parts_for_entry(entry))
         else:
             manifest.add_file(entry)
             with open(path, "rb") as f:
                 data = f.read()
-            request_parts.append(types.Part.from_text(text=f"[FILE] {base_name} (new, this turn)"))
+            request_parts.append(types.Part.from_text(text=f"[FILE] {display_name} (new, this turn)"))
             request_parts.append(types.Part.from_bytes(data=data, mime_type=mime))
 
     manifest.save()
@@ -2023,100 +2271,113 @@ def cmd_send(client, manifest, session_id, args, paths, text_message):
     if not final_text:
         final_text.append(tr("prompt_default_analyze"))
     request_parts.append(types.Part.from_text(text="\n\n".join(final_text)))
-    return request_parts, unresolved
+    return request_parts, unresolved, (sent_blocks, sent_media)
 
 
-# ─── F2: /apply ──────────────────────────────────────────────────────────
-def _default_apply_dst(manifest, session_id, project_root):
-    proj = manifest.data.get("project_path")
+# ─── F2: /apply (Smart Pull: Cloud -> Local) ─────────────────────────────
+def cmd_apply(client, manifest: Manifest, session_id: str, pattern: str, project_root: str | None, args):
+    sdir = session_dir(session_id)
+    print(tr("apply_banner"))
+
     if project_root and os.path.isdir(project_root):
-        return project_root
-    if proj:
-        if os.path.isfile(proj) and zipfile.is_zipfile(proj):
-            return os.path.join(session_dir(session_id), "project_extracted")
-        if os.path.isdir(proj):
-            return proj
-    return None
+        dst_root = project_root
+    elif getattr(args, "project", None):
+        dst_root = os.path.abspath(args.project)
+    else:
+        dst_root = ensure_dir(os.path.join(sdir, DOWNLOADS_SUBDIR))
 
+    print(tr("apply_target_dir", dir=dst_root))
 
-def cmd_apply(manifest, session_id, src_pattern, dst_path, project_root, args):
-    if not dst_path:
-        dst_path = _default_apply_dst(manifest, session_id, project_root)
-        if not dst_path:
-            print(tr("apply_no_project")); return
+    candidates = manifest.files()
+    if pattern:
+        candidates = manifest.find_all_files(pattern)
+        if not candidates:
+            print(tr("apply_not_found", pattern=pattern))
+            return
 
-    s_root = session_dir(session_id)
-    save_dir = os.path.join(s_root, SAVED_SUBDIR)
-    src_clean = (src_pattern or "").strip("\"'").rstrip("/")
+    downloaded = 0
+    skipped = 0
+    trashed = 0
+    lost = 0
 
-    candidates: dict[str, str] = {}
+    for entry in list(candidates):
+        d_name = entry.get("display_name", "?")
+        state = resolve_file_state(entry)
+        local_p = entry.get("local_path")
+        uri = entry.get("files_api_uri")
 
-    if os.path.isdir(save_dir):
-        for root_d, _, files_in_d in os.walk(save_dir):
-            for fn in files_in_d:
-                abs_f = os.path.join(root_d, fn)
-                rel_f = os.path.relpath(abs_f, save_dir).replace(os.sep, "/")
-                candidates[rel_f] = abs_f
+        clean_rel = normalize_display_name(d_name)
+        if local_p:
+            orig_base = os.path.basename(local_p)
+            rel_dir = os.path.dirname(clean_rel)
+            clean_rel = os.path.join(rel_dir, orig_base) if rel_dir else orig_base
 
-    for f in manifest.files():
-        if f.get("source") == "generated":
+        target_path = os.path.join(dst_root, clean_rel)
+
+        if state == "ok":
+            skipped += 1
             continue
-        name = normalize_display_name(f.get("display_name", ""))
-        loc = f.get("local_path")
-        if name not in candidates and loc and os.path.isfile(loc):
-            candidates[name] = loc
 
-    matched = []
-    for rel_name, src_abs in sorted(candidates.items()):
-        if not src_clean:
-            matched.append((rel_name, src_abs))
-        elif rel_name == src_clean or rel_name.startswith(src_clean + "/") or \
-             fnmatch.fnmatch(rel_name, src_clean) or os.path.basename(rel_name) == src_clean:
-            matched.append((rel_name, src_abs))
+        if state == "out-of-sync":
+            if not getattr(args, "yes", False) and not getattr(args, "force", False):
+                if not ask_yes_no(tr("apply_out_of_sync_ask", name=d_name), default=False):
+                    skipped += 1
+                    continue
+            content = _download_cloud_file(client, uri)
+            if content is None:
+                entry.pop("files_api_uri", None)
+                print(tr("apply_download_err", name=d_name, err="Expired/Not found"))
+                lost += 1
+            else:
+                ensure_dir(os.path.dirname(local_p) or ".")
+                with open(local_p, "wb") as f:
+                    f.write(content)
+                entry["local_sha256"] = sha256_of_file(local_p)
+                print(tr("apply_overwritten", path=local_p))
+                downloaded += 1
 
-    if not matched:
-        print(tr("apply_not_found", pattern=src_pattern or "(all)")); return
+        elif state == "detached":
+            content = _download_cloud_file(client, uri)
+            if content is None:
+                entry.pop("files_api_uri", None)
+                print(tr("apply_download_err", name=d_name, err="Expired/Not found"))
+                lost += 1
+            else:
+                ensure_dir(os.path.dirname(target_path) or ".")
+                with open(target_path, "wb") as f:
+                    f.write(content)
+                entry["local_path"] = target_path
+                entry["abs_path"] = target_path
+                entry["local_sha256"] = sha256_of_file(target_path)
+                print(tr("apply_downloaded", name=d_name, path=target_path))
+                downloaded += 1
 
-    plan = []
-    print(tr("apply_plan", count=len(matched), src=src_pattern or "(all)", dst=dst_path))
+        elif state == "new-local":
+            if local_p and os.path.isfile(local_p):
+                ans = input(tr("apply_new_local_ask", name=d_name)).strip().lower()
+                if ans == "d":
+                    t_path = _soft_delete(sdir, local_p, d_name)
+                    if t_path:
+                        print(tr("apply_trashed", path=t_path))
+                        trashed += 1
+                    try:
+                        manifest.files().remove(entry)
+                    except ValueError:
+                        pass
+                else:
+                    skipped += 1
 
-    single_file_target = (len(matched) == 1 and not (os.path.isdir(dst_path) or dst_path.endswith(("/", "\\"))))
+        elif state == "lost":
+            print(tr("apply_lost", name=d_name))
+            lost += 1
 
-    for rel_name, src_abs in matched:
-        if single_file_target:
-            target = dst_path
-        else:
-            target = os.path.join(dst_path, rel_name)
-        status = "CONFLICT" if os.path.exists(target) else "new"
-        print(f"  {rel_name}  →  {target}  [{status}]")
-        plan.append((src_abs, target, rel_name))
-
-    if args.dry_run:
-        return
-    if not args.yes and not ask_yes_no(tr("apply_ask"), default=False):
-        return
-
-    copied = 0
-    for src_abs, target, rel_name in plan:
-        if not os.path.isfile(src_abs):
-            print(tr("apply_local_missing", name=rel_name), file=sys.stderr)
-            continue
-        ensure_dir(os.path.dirname(target) or ".")
-        if os.path.exists(target) and not args.force and not args.yes:
-            if not ask_yes_no(tr("apply_conflict", target=target), default=False):
-                continue
-        try:
-            shutil.copy2(src_abs, target)
-            print(tr("apply_success", target=target))
-            copied += 1
-        except OSError as e:
-            print(tr("apply_err", target=target, err=e), file=sys.stderr)
-    print(tr("apply_done", done=copied, total=len(plan)))
+    manifest.save()
+    print(tr("apply_summary", downloaded=downloaded, skipped=skipped, trashed=trashed, lost=lost))
 
 
-# ─── F6: /forget (Удаление из манифеста и облака при detached) ─────────────
+# ─── F6: /forget ─────────────────────────────────────────────────────────
 def _forget_entry(client, manifest, entry, args, dry_run=False):
-    name = normalize_display_name(entry.get("display_name", "?"))
+    name = entry.get("display_name", "?")
     is_generated = entry.get("source") == "generated"
     is_detached = resolve_file_state(entry) == "detached"
 
@@ -2128,7 +2389,6 @@ def _forget_entry(client, manifest, entry, args, dry_run=False):
         print(tr("forget_dry_run", name=name))
         return True
 
-    # Для detached файлов вызываем client.files.delete()
     if is_detached and entry.get("files_api_uri"):
         _delete_cloud_file(client, entry["files_api_uri"])
 
@@ -2298,6 +2558,7 @@ def print_banner(session_id, manifest, args, project_root=None):
     print(f" Log:         {os.path.join(session_dir(session_id), LOG_FILE)}")
     print(f" Saved:       {os.path.join(session_dir(session_id), SAVED_SUBDIR)}")
     print(f" Media:       {os.path.join(session_dir(session_id), MEDIA_SUBDIR)}")
+    print(f" Trash:       {os.path.join(session_dir(session_id), TRASH_SUBDIR)}")
     print(f" Model:       {manifest.data.get('model', args.model)}   Temperature: {args.temperature}")
     proj = manifest.data.get("project_path")
     if proj:
@@ -2314,15 +2575,20 @@ def print_banner(session_id, manifest, args, project_root=None):
     print("═" * 65)
 
 
-def _process_response(response, manifest, log, sdir):
+def _process_response(response, manifest, log, sdir, extra_sent_data=None):
     text, media = extract_response_content(response)
     ts = datetime.now()
     history = manifest.data.get("history", [])
     turn_number = history[-1].get("turn", _next_turn(manifest)) if history else _next_turn(manifest)
     saved_media = save_response_media(manifest, sdir, media, turn_number, ts)
+
+    sent_blocks, sent_media = extra_sent_data or ([], [])
+
     LAST_RESPONSE["text"] = text
-    LAST_RESPONSE["media"] = saved_media
+    LAST_RESPONSE["media"] = saved_media + sent_media
+    LAST_RESPONSE["sent_blocks"] = sent_blocks
     LAST_RESPONSE["turn"] = turn_number
+
     record_turn(manifest, log, "model", text, ts=ts, turn=turn_number)
     for m in saved_media:
         log.write("MEDIA", f"{m['name']} ({m['mime']}, {human_size(m['size'])})",
@@ -2351,7 +2617,7 @@ def _send_with_retry_or_rollback(chat, payload, manifest, args):
 
 def _parse_apply_args(body):
     try:
-        tokens = shlex.split(body)
+        tokens = shlex.split(body, posix=(sys.platform != "win32"))
     except ValueError:
         tokens = body.split()
     if not tokens:
@@ -2441,7 +2707,7 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
                 if not body:
                     print(tr("focus_usage")); continue
                 try:
-                    tokens = shlex.split(body)
+                    tokens = shlex.split(body, posix=(sys.platform != "win32"))
                 except ValueError as e:
                     print(tr("parse_err_syntax", err=e)); continue
                 pattern = tokens[0]
@@ -2466,7 +2732,7 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
                     print(tr("parse_err_syntax", err=e)); continue
                 if not paths:
                     print(tr("send_no_files")); continue
-                parts, unresolved = cmd_send(client, manifest, session_id, args, paths, text_msg)
+                parts, unresolved, extra_sent = cmd_send(client, manifest, session_id, args, paths, text_msg)
                 if parts is None:
                     continue
                 if unresolved:
@@ -2476,20 +2742,15 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
                 record_turn(manifest, log, "user", raw)
                 print(think)
                 response = _send_with_retry_or_rollback(chat, parts, manifest, args)
-                _process_response(response, manifest, log, sdir)
+                _process_response(response, manifest, log, sdir, extra_sent_data=extra_sent)
                 continue
 
-            # /save (сохраняет только блоки КОДА из ответа модели)
+            # /save (поддерживает --zip)
             if raw == "/save" or raw.startswith("/save "):
                 body = raw[5:].strip()
-                try:
-                    tokens = shlex.split(body) if body else []
-                except ValueError:
-                    tokens = body.split() if body else []
-                arg = tokens[0] if tokens else None
-                cmd_save(manifest, save_root, arg, args); continue
+                cmd_save(manifest, save_root, body, args); continue
 
-            # /md (сохраняет полный ТЕКСТ сообщения модели)
+            # /md
             if raw == "/md" or raw.startswith("/md "):
                 filename = raw[3:].strip()
                 if not filename:
@@ -2509,18 +2770,15 @@ def run_repl(client, chat, manifest, session_id, save_root, project_root, args, 
 
             # /apply
             if raw == "/apply" or raw.startswith("/apply "):
-                body = raw[7:].strip()
-                src, dst = _parse_apply_args(body)
-                if not src:
-                    print(tr("apply_usage")); continue
-                cmd_apply(manifest, session_id, src, dst, project_root, args)
+                pat = raw[6:].strip() or None
+                cmd_apply(client, manifest, session_id, pat, project_root, args)
                 continue
 
             # /forget
             if raw == "/forget" or raw.startswith("/forget "):
                 body = raw[8:].strip()
                 try:
-                    tokens = shlex.split(body) if body else []
+                    tokens = shlex.split(body, posix=(sys.platform != "win32")) if body else []
                 except ValueError:
                     tokens = body.split() if body else []
                 dry = "--dry-run" in tokens
@@ -2643,8 +2901,8 @@ def main(argv=None):
     log = SessionLog(os.path.join(sdir, LOG_FILE))
     save_root = ensure_dir(os.path.join(sdir, SAVED_SUBDIR))
     ensure_dir(os.path.join(sdir, MEDIA_SUBDIR))
+    ensure_dir(os.path.join(sdir, TRASH_SUBDIR))
 
-    # Конфликт смены проекта
     stored_proj = manifest.data.get("project_path")
     if args.project:
         new_proj_abs = os.path.abspath(args.project)
@@ -2712,7 +2970,6 @@ def main(argv=None):
             if os.path.isfile(project_root) and zipfile.is_zipfile(project_root):
                 project_root = os.path.join(sdir, "project_extracted")
 
-    # Обработка флага --sync
     if args.sync:
         sync_session(client, manifest, args, dry_run=args.dry_run)
         if not sys.stdin.isatty():
