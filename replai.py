@@ -1,4 +1,4 @@
-# replai v0.0.7
+# replai v0.0.8
 # Terminal REPL for Gemini — project-aware code chat with file round-trip.
 # State dir: ./replai/ (visible, portable). No hidden dirs.
 # License: MIT
@@ -20,6 +20,26 @@ import time
 import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta
+
+# Регистрируем MIME-типы для расширений, которых нет в базе Python по умолчанию
+_TEXT_MIME_MAP = {
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+    ".toml": "text/x-toml",
+    ".dockerfile": "text/plain",
+    ".makefile": "text/plain",
+    ".cfg": "text/plain",
+    ".conf": "text/plain",
+    ".pyi": "text/x-python",
+    ".pyx": "text/x-python",
+    ".kts": "text/x-kotlin",
+    ".fish": "text/x-shellscript",
+    ".ps1": "text/x-powershell",
+    ".rss": "application/rss+xml",
+    ".atom": "application/atom+xml",
+}
+for _ext, _mime in _TEXT_MIME_MAP.items():
+    mimetypes.add_type(_mime, _ext)
 
 try:
     from prompt_toolkit import PromptSession
@@ -49,7 +69,7 @@ except ImportError:
 from google import genai
 from google.genai import types
 
-__version__ = "0.0.7"
+__version__ = "0.0.8"
 
 # ─── Localization (i18n) ──────────────────────────────────────────────────
 CURRENT_LANG = os.environ.get("REPLAI_LANG", "ru").lower().strip()
@@ -842,7 +862,14 @@ def classify_file(path: str) -> str:
 
 def file_mime(path: str) -> str:
     mime, _ = mimetypes.guess_type(path)
-    return mime or "application/octet-stream"
+    if mime:
+        return mime
+    # Fallback для расширений, которые mimetypes не знает,
+    # но которые по классификатору являются текстом
+    ext = os.path.splitext(path)[1].lower()
+    if ext in TEXT_EXTENSIONS:
+        return "text/plain"
+    return "application/octet-stream"
 
 
 def _is_image_model(model_name: str) -> bool:
@@ -1239,7 +1266,6 @@ def _upload(client, abs_path, display_name):
     import tempfile
     tmp_path = None
     try:
-        # 1. Защита от кириллицы в локальном пути (Баг Google SDK)
         try:
             abs_path.encode('ascii')
             target_upload_path = abs_path
@@ -1251,13 +1277,18 @@ def _upload(client, abs_path, display_name):
                     shutil.copyfileobj(f_in, tmp)
             target_upload_path = tmp_path
 
-        # 2. Загрузка (используем безопасный путь)
-        uploaded = client.files.upload(file=target_upload_path, config={"display_name": display_name})
+        # ⬇️ ГЛАВНОЕ ИЗМЕНЕНИЕ: передаём mime_type явно
+        explicit_mime = file_mime(abs_path)
+        uploaded = client.files.upload(
+            file=target_upload_path,
+            config={
+                "display_name": display_name,
+                "mime_type": explicit_mime,
+            }
+        )
         
         state_prop = getattr(uploaded, "state", None)
         state_name = getattr(state_prop, "name", str(state_prop or ""))
-
-        # 3. Ожидание обработки (с backoff и точками)
         delay = 2.0
         dots_printed = False
         while state_name == "PROCESSING":
@@ -1271,25 +1302,20 @@ def _upload(client, abs_path, display_name):
             uploaded = client.files.get(name=uploaded.name)
             state_prop = getattr(uploaded, "state", None)
             state_name = getattr(state_prop, "name", str(state_prop or ""))
-
         if dots_printed:
             print()
-
         if state_name == "FAILED":
             print(tr("files_api_failed", path=abs_path), file=sys.stderr)
             return None, None, None
-            
         uri = getattr(uploaded, "uri", None)
         sha = getattr(uploaded, "sha256_hash", None)
         exp = getattr(uploaded, "expiration_time", None)
         exp_str = exp.isoformat() if hasattr(exp, "isoformat") else (str(exp) if exp else None)
         return uri, sha, exp_str
-        
     except Exception as e:
         print(tr("file_read_err", path=abs_path, err=e), file=sys.stderr)
         return None, None, None
     finally:
-        # Убираем за собой мусор
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
